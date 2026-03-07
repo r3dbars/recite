@@ -8,9 +8,9 @@ Select text in any app, hit your hotkey, and Recite reads it back to you.
 
 ## Why
 
-Speechify charges $139/year and sends everything you read to their servers. They've already tried to monetize users' uploaded content without consent. Recite does the same thing — better — for free, with your audio never leaving your Mac.
+On-device TTS on Apple Silicon is now fast enough to feel instant. There's no reason for your reading to go through a cloud server — it's slower, it costs money, and your content is none of anyone's business.
 
-On-device TTS on Apple Silicon is now fast enough to feel instant. There's no reason to pay for cloud inference.
+Recite keeps everything local. Free, private, always available.
 
 ---
 
