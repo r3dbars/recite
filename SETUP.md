@@ -1,10 +1,12 @@
 # Setting Up Recite in Xcode
 
-All source code is written and ready. ~5 minutes to wire up in Xcode.
+All source code is written and ready. ~10 minutes to wire up in Xcode.
 
 ## Requirements
-- macOS 13.0+
+- macOS 14.0+ (Sonoma or later)
 - Xcode 15+
+- Swift 5.9+
+- Apple Silicon Mac (M1 or later) — required for MLX inference
 
 ---
 
@@ -22,15 +24,30 @@ All source code is written and ready. ~5 minutes to wire up in Xcode.
 
 ---
 
-## Step 2 — Replace Generated Files
+## Step 2 — Add mlx-audio-swift Package
 
-Delete from Xcode project navigator:
-- `ContentView.swift`
-- `ReciteApp.swift` (generated one)
+1. In Xcode: **File → Add Package Dependencies…**
+2. Enter the URL: `https://github.com/Blaizzy/mlx-audio-swift.git`
+3. Set dependency rule to **Branch → `main`**
+4. Click **Add Package**
+5. In the "Choose Package Products" dialog, add these to your target:
+   - `MLXAudioTTS`
+   - `MLXAudioCore`
+6. Click **Add Package**
+
+> The package will also pull in `mlx-swift` and `swift-numerics` automatically.
 
 ---
 
-## Step 3 — Add Source Files
+## Step 3 — Replace Generated Files
+
+Delete from Xcode project navigator:
+- `ContentView.swift`
+- `ReciteApp.swift` (the generated one)
+
+---
+
+## Step 4 — Add Source Files
 
 Drag all files from `Recite/Sources/Recite/` into the project:
 - `ReciteApp.swift`
@@ -44,7 +61,7 @@ Uncheck "Copy items if needed."
 
 ---
 
-## Step 4 — Info.plist
+## Step 5 — Info.plist
 
 Add to the **Info** tab of your target:
 
@@ -57,7 +74,7 @@ Or replace the generated `Info.plist` with `Recite/Resources/Info.plist`.
 
 ---
 
-## Step 5 — Signing & Capabilities
+## Step 6 — Signing & Capabilities
 
 1. **Signing & Capabilities** → set your Apple Developer team
 2. Add **Accessibility** capability (or add `Recite.entitlements` from `Recite/Resources/`)
@@ -65,15 +82,23 @@ Or replace the generated `Info.plist` with `Recite/Resources/Info.plist`.
 
 ---
 
-## Step 6 — Build & Run
+## Step 7 — Build & Run
 
 Hit **⌘R**. Recite appears in the menu bar as a headphones icon.
 
-**First use:**
-1. Grant Accessibility permission when prompted
-2. Select any text in any app
-3. Press **⌘⇧R** — Recite reads it aloud
-4. Or click the menu bar icon → **Add Clipboard** to queue clipboard text
+**First launch:**
+1. The Qwen3-TTS model (~1.2 GB) downloads automatically from Hugging Face
+2. You'll see "Loading Qwen3-TTS…" in the popover while the model initializes
+3. Once loaded, the status changes to "Qwen3-TTS ready"
+4. Grant Accessibility permission when prompted
+
+**Using Recite:**
+1. Select any text in any app
+2. Press **⌘⇧R** — Recite generates speech and reads it aloud
+3. Or click the menu bar icon → **Add Clipboard** to queue clipboard text
+4. Use the speed control (0.5x – 2x) to adjust playback speed
+
+> **Note:** First generation takes a few seconds while the model warms up. Subsequent generations are faster.
 
 ---
 
@@ -82,29 +107,39 @@ Hit **⌘R**. Recite appears in the menu bar as a headphones icon.
 ```
 ReciteApp.swift      — @main, SwiftUI lifecycle
 AppDelegate.swift    — NSStatusItem, popover, global hotkey (⌘⇧R),
-                       context menu, read-selection + read-clipboard actions
+                       context menu, model loading on launch
 TextGrabber.swift    — Gets selected text via AX API, falls back to ⌘C simulation
-SpeechEngine.swift   — AVSpeechSynthesizer wrapper, playback state, speed, voice
+SpeechEngine.swift   — Qwen3-TTS via mlx-audio-swift, audio generation + playback
 ReadingQueue.swift   — Queue of text items, auto-advance on completion
-MenuBarView.swift    — SwiftUI popover: player controls, queue list, settings
+MenuBarView.swift    — SwiftUI popover: player controls, model status, queue, settings
 ```
 
 **Key design decisions:**
-- `AVSpeechSynthesizer` with Enhanced/Premium Neural Voice for v1 — on-device, zero setup, genuinely good
-- Accessibility API first, clipboard simulation fallback — no side effects when AX works
+- Qwen3-TTS via mlx-audio-swift — high-quality neural TTS, 100% on-device via MLX
+- Model auto-downloads on first launch from Hugging Face (mlx-community)
+- WAV audio generation → AVAudioPlayer for playback with variable speed
+- Accessibility API first, clipboard simulation fallback
 - Queue + auto-advance — add multiple items, walk away and listen
-- Speed control — 30% to 90% of default rate
-- No audio storage anywhere — Recite speaks and forgets
+- Speed control — 0.5x to 2x playback rate
 
 ---
 
-## Roadmap (v2+)
+## Troubleshooting
 
-- [ ] **Kokoro voice** — swap AVSpeechSynthesizer for Kokoro 82M via CoreML
-  - Model file: `kokoro-v1.0.mlpackage` (convert from ONNX via coremltools)
-  - Drop-in replacement in `SpeechEngine.speak()`
-- [ ] Article parser — paste a URL, Recite strips the article body and reads it
-- [ ] Obsidian vault reader — queue up notes from your vault
-- [ ] Reading history
-- [ ] Launch at login
-- [ ] Highlight sync — shows which word is being spoken in the popover
+**Model won't load:**
+- Ensure you're on Apple Silicon (M1+). Intel Macs are not supported.
+- Check internet connection — the model downloads from Hugging Face on first launch.
+- Look for errors in the menu bar popover or Xcode console.
+
+**No sound:**
+- Check System Settings → Sound → Output device
+- Ensure the app isn't generating (look for "Generating…" indicator)
+
+**Hotkey doesn't work:**
+- Grant Accessibility permission: System Settings → Privacy & Security → Accessibility → enable Recite
+- Some apps block AX text reading — clipboard fallback will activate automatically
+
+**Build errors with mlx-audio-swift:**
+- Ensure Xcode 15+ and Swift 5.9+
+- Clean build folder: Product → Clean Build Folder (⌘⇧K)
+- Reset package cache: File → Packages → Reset Package Caches
