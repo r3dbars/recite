@@ -1,11 +1,13 @@
 import AppKit
 import ApplicationServices
+import Combine
 
 /// Grabs selected text from the frontmost application.
 /// Strategy:
 ///   1. Try Accessibility API (AXSelectedText) — fast, no clipboard side-effects
 ///   2. Fall back to simulated ⌘C — works in any app that supports copy
-class TextGrabber {
+@MainActor
+class TextGrabber: ObservableObject {
     static let shared = TextGrabber()
 
     // MARK: - Public

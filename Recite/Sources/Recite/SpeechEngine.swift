@@ -1,5 +1,7 @@
 import AVFoundation
 import Combine
+import MLX
+import MLXLMCommon
 import MLXAudioTTS
 import MLXAudioCore
 
@@ -80,15 +82,19 @@ class SpeechEngine: NSObject, ObservableObject {
                     repetitionContextSize: 30
                 )
 
-                let result = try await model.generate(
+                let audioArray = try await model.generate(
                     text: text,
-                    parameters: params
+                    voice: nil,
+                    refAudio: nil,
+                    refText: nil,
+                    language: nil,
+                    generationParameters: params
                 )
 
                 if Task.isCancelled { return }
 
                 // Convert MLXArray audio to WAV data and play
-                let audioData = try audioToWAV(result.audio, sampleRate: Self.sampleRate)
+                let audioData = try audioToWAV(audioArray, sampleRate: Self.sampleRate)
                 try playAudio(audioData)
 
             } catch {

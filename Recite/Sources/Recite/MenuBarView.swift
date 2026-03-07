@@ -262,7 +262,6 @@ struct MenuBarView: View {
                 }
                 .listStyle(.plain)
                 .frame(maxHeight: 160)
-                .environment(\.editMode, .constant(.active))
             }
         }
     }
