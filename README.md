@@ -8,9 +8,7 @@ Select text in any app, hit your hotkey, and Recite reads it back to you.
 
 ## Why
 
-On-device TTS on Apple Silicon is now fast enough to feel instant. There's no reason for your reading to go through a cloud server — it's slower, it costs money, and your content is none of anyone's business.
-
-Recite keeps everything local. Free, private, always available.
+On-device TTS on Apple Silicon is now fast enough to feel instant. Your audio stays on your Mac, there's no subscription, and nothing is sent to any server. Recite is the reader that should have always existed.
 
 ---
 
