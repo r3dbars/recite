@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Hide from Dock — menu bar only -->
+    <key>LSUIElement</key>
+    <true/>
+
+    <!-- Accessibility permission — needed for global hotkey and text grabbing -->
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Recite needs accessibility access to read selected text from any app.</string>
+
+    <key>CFBundleName</key>
+    <string>Recite</string>
+
+    <key>CFBundleDisplayName</key>
+    <string>Recite</string>
+
+    <key>CFBundleIdentifier</key>
+    <string>com.r3dbars.recite</string>
+
+    <key>CFBundleVersion</key>
+    <string>1</string>
+
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+
+    <key>NSPrincipalClass</key>
+    <string>NSApplication</string>
+
+    <key>NSHighResolutionCapable</key>
+    <true/>
+
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+</dict>
+</plist>

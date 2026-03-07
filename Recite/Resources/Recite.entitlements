@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Accessibility API for reading selected text from any app -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+
+    <!-- App Sandbox off — required for CGEventTap global hotkey -->
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+
+    <!-- Temporary exception for reading pasteboard from other apps -->
+    <key>com.apple.security.temporary-exception.sbpl</key>
+    <array>
+        <string>(allow iokit-open (iokit-user-client-class "IOHIDParamUserClient"))</string>
+    </array>
+</dict>
+</plist>
