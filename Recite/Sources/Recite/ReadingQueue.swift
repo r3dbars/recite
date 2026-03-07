@@ -2,6 +2,7 @@ import Foundation
 import Combine
 
 /// Manages a queue of text items to be read aloud.
+@MainActor
 class ReadingQueue: ObservableObject {
     static let shared = ReadingQueue()
 
@@ -41,7 +42,6 @@ class ReadingQueue: ObservableObject {
 
     func remove(at offsets: IndexSet) {
         items.remove(atOffsets: offsets)
-        // Adjust currentIndex if needed
         if let idx = currentIndex {
             if offsets.contains(idx) {
                 SpeechEngine.shared.stop()
@@ -65,35 +65,29 @@ class ReadingQueue: ObservableObject {
 
     // MARK: - Playback Control
 
-    /// Called by AppDelegate / UI to start playing
     func playNext() {
         guard !items.isEmpty else { return }
 
         if let idx = currentIndex {
-            // Advance to next
             let next = idx + 1
             if next < items.count {
                 currentIndex = next
                 SpeechEngine.shared.speak(items[next].text)
             } else {
-                // Queue exhausted
                 currentIndex = nil
             }
         } else {
-            // Start from beginning
             currentIndex = 0
             SpeechEngine.shared.speak(items[0].text)
         }
     }
 
-    /// Play a specific item
     func play(item: Item) {
         guard let idx = items.firstIndex(where: { $0.id == item.id }) else { return }
         currentIndex = idx
         SpeechEngine.shared.speak(item.text)
     }
 
-    /// Called by SpeechEngine when an utterance finishes
     func didFinishCurrent() {
         guard let idx = currentIndex else { return }
         let next = idx + 1

@@ -1,63 +1,121 @@
 import AVFoundation
 import Combine
+import MLXAudioTTS
+import MLXAudioCore
 
-/// Text-to-speech engine wrapping AVSpeechSynthesizer.
-/// v1: Uses Apple Neural Voice (on-device, zero setup, surprisingly good).
-/// v2 path: swap synthesiser for Kokoro once CoreML model is ready.
+/// Text-to-speech engine powered by Qwen3-TTS via mlx-audio-swift.
+/// Runs entirely on-device using MLX on Apple Silicon.
+@MainActor
 class SpeechEngine: NSObject, ObservableObject {
     static let shared = SpeechEngine()
 
-    enum State { case idle, playing, paused }
+    enum State { case idle, playing, paused, loading, generating }
+
+    enum ModelStatus: Equatable {
+        case notLoaded
+        case downloading(progress: Double)
+        case loading
+        case ready
+        case error(String)
+    }
 
     @Published var state: State = .idle
+    @Published var modelStatus: ModelStatus = .notLoaded
     @Published var currentText: String = ""
     @Published var progress: Double = 0
-    @Published var rate: Float = AVSpeechUtteranceDefaultSpeechRate  // 0.0 – 1.0
-    @Published var selectedVoiceIdentifier: String = ""
+    @Published var speed: Double = 1.0  // 0.5x – 2.0x playback speed
 
-    private let synthesizer = AVSpeechSynthesizer()
-    private var currentUtterance: AVSpeechUtterance?
-    private var fullTextLength: Int = 0
+    private var model: Qwen3TTSModel?
+    private var audioPlayer: AVAudioPlayer?
+    private var generationTask: Task<Void, Never>?
+
+    private static let modelID = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"
+    private static let sampleRate: Double = 24000
 
     override init() {
         super.init()
-        synthesizer.delegate = self
-        // Default to best available English Neural voice
-        selectedVoiceIdentifier = bestEnglishVoice()?.identifier ?? ""
+    }
+
+    // MARK: - Model Loading
+
+    /// Load the Qwen3-TTS model. Call once at app launch.
+    func loadModel() async {
+        guard modelStatus == .notLoaded || isErrorStatus else { return }
+        modelStatus = .loading
+
+        do {
+            let loaded = try await Qwen3TTSModel.fromPretrained(Self.modelID)
+            self.model = loaded
+            modelStatus = .ready
+        } catch {
+            modelStatus = .error(error.localizedDescription)
+        }
+    }
+
+    private var isErrorStatus: Bool {
+        if case .error = modelStatus { return true }
+        return false
     }
 
     // MARK: - Playback
 
     func speak(_ text: String) {
-        let utterance = AVSpeechUtterance(string: text)
-        utterance.rate = rate
-        utterance.voice = voice(for: selectedVoiceIdentifier)
-        utterance.pitchMultiplier = 1.0
-        utterance.volume = 1.0
+        guard modelStatus == .ready, let model = model else { return }
+
+        // Cancel any in-progress generation
+        generationTask?.cancel()
+        audioPlayer?.stop()
 
         currentText = text
-        fullTextLength = text.count
         progress = 0
-        currentUtterance = utterance
+        state = .generating
 
-        synthesizer.speak(utterance)
-        state = .playing
+        generationTask = Task {
+            do {
+                let params = GenerateParameters(
+                    maxTokens: 4096,
+                    temperature: 0.7,
+                    topP: 0.95,
+                    repetitionPenalty: 1.5,
+                    repetitionContextSize: 30
+                )
+
+                let result = try await model.generate(
+                    text: text,
+                    parameters: params
+                )
+
+                if Task.isCancelled { return }
+
+                // Convert MLXArray audio to WAV data and play
+                let audioData = try audioToWAV(result.audio, sampleRate: Self.sampleRate)
+                try playAudio(audioData)
+
+            } catch {
+                if !Task.isCancelled {
+                    state = .idle
+                    currentText = ""
+                }
+            }
+        }
     }
 
     func pause() {
-        guard state == .playing else { return }
-        synthesizer.pauseSpeaking(at: .word)
+        guard state == .playing, let player = audioPlayer else { return }
+        player.pause()
         state = .paused
     }
 
     func resume() {
-        guard state == .paused else { return }
-        synthesizer.continueSpeaking()
+        guard state == .paused, let player = audioPlayer else { return }
+        player.play()
         state = .playing
     }
 
     func stop() {
-        synthesizer.stopSpeaking(at: .word)
+        generationTask?.cancel()
+        audioPlayer?.stop()
+        audioPlayer = nil
         state = .idle
         currentText = ""
         progress = 0
@@ -68,6 +126,7 @@ class SpeechEngine: NSObject, ObservableObject {
         case .playing: pause()
         case .paused:  resume()
         case .idle:    ReadingQueue.shared.playNext()
+        case .loading, .generating: break
         }
     }
 
@@ -76,79 +135,94 @@ class SpeechEngine: NSObject, ObservableObject {
         ReadingQueue.shared.playNext()
     }
 
-    func updateRate(_ newRate: Float) {
-        rate = newRate
-        // If currently playing, restart current item at new rate
-        if state == .playing, let text = currentUtterance?.speechString {
-            stop()
-            speak(text)
+    func updateSpeed(_ newSpeed: Double) {
+        speed = newSpeed
+        audioPlayer?.rate = Float(newSpeed)
+    }
+
+    // MARK: - Audio Playback
+
+    private func playAudio(_ data: Data) throws {
+        let player = try AVAudioPlayer(data: data)
+        player.delegate = self
+        player.enableRate = true
+        player.rate = Float(speed)
+        player.play()
+        self.audioPlayer = player
+        state = .playing
+
+        // Start progress tracking
+        trackProgress(player: player)
+    }
+
+    private func trackProgress(player: AVAudioPlayer) {
+        Task {
+            while player.isPlaying || state == .paused {
+                if state == .playing, player.duration > 0 {
+                    progress = player.currentTime / player.duration
+                }
+                try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
+            }
         }
     }
 
-    // MARK: - Voices
+    // MARK: - WAV Encoding
 
-    var availableVoices: [AVSpeechSynthesisVoice] {
-        AVSpeechSynthesisVoice.speechVoices()
-            .filter { $0.language.hasPrefix("en") }
-            .sorted { $0.name < $1.name }
-    }
+    private func audioToWAV(_ audioArray: MLXArray, sampleRate: Double) throws -> Data {
+        // Convert MLXArray to Float32 samples
+        let samples = audioArray.asArray(Float.self)
+        let numSamples = samples.count
+        let bytesPerSample = 2 // 16-bit PCM
+        let dataSize = numSamples * bytesPerSample
 
-    private func bestEnglishVoice() -> AVSpeechSynthesisVoice? {
-        // Prefer "Enhanced" or "Premium" Neural voices (on-device, higher quality)
-        let voices = AVSpeechSynthesisVoice.speechVoices()
-            .filter { $0.language.hasPrefix("en-US") }
+        var data = Data()
 
-        // macOS 14+: quality enum
-        if #available(macOS 14.0, *) {
-            if let premium = voices.first(where: { $0.quality == .premium }) { return premium }
-            if let enhanced = voices.first(where: { $0.quality == .enhanced }) { return enhanced }
+        // WAV header
+        data.append(contentsOf: "RIFF".utf8)
+        data.append(contentsOf: withUnsafeBytes(of: UInt32(36 + dataSize).littleEndian) { Array($0) })
+        data.append(contentsOf: "WAVE".utf8)
+
+        // fmt chunk
+        data.append(contentsOf: "fmt ".utf8)
+        data.append(contentsOf: withUnsafeBytes(of: UInt32(16).littleEndian) { Array($0) })
+        data.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) }) // PCM
+        data.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) }) // mono
+        data.append(contentsOf: withUnsafeBytes(of: UInt32(sampleRate).littleEndian) { Array($0) })
+        data.append(contentsOf: withUnsafeBytes(of: UInt32(sampleRate * Double(bytesPerSample)).littleEndian) { Array($0) })
+        data.append(contentsOf: withUnsafeBytes(of: UInt16(bytesPerSample).littleEndian) { Array($0) })
+        data.append(contentsOf: withUnsafeBytes(of: UInt16(16).littleEndian) { Array($0) }) // bits per sample
+
+        // data chunk
+        data.append(contentsOf: "data".utf8)
+        data.append(contentsOf: withUnsafeBytes(of: UInt32(dataSize).littleEndian) { Array($0) })
+
+        // Convert float samples to 16-bit PCM
+        for sample in samples {
+            let clamped = max(-1.0, min(1.0, sample))
+            let int16 = Int16(clamped * Float(Int16.max))
+            data.append(contentsOf: withUnsafeBytes(of: int16.littleEndian) { Array($0) })
         }
-        return voices.first { $0.name.contains("Samantha") } ?? voices.first
-    }
 
-    private func voice(for identifier: String) -> AVSpeechSynthesisVoice? {
-        guard !identifier.isEmpty else { return bestEnglishVoice() }
-        return AVSpeechSynthesisVoice(identifier: identifier) ?? bestEnglishVoice()
+        return data
     }
 }
 
-// MARK: - AVSpeechSynthesizerDelegate
+// MARK: - AVAudioPlayerDelegate
 
-extension SpeechEngine: AVSpeechSynthesizerDelegate {
-    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
-                           didStart utterance: AVSpeechUtterance) {
-        state = .playing
+extension SpeechEngine: AVAudioPlayerDelegate {
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        Task { @MainActor in
+            progress = 1.0
+            state = .idle
+            currentText = ""
+            ReadingQueue.shared.didFinishCurrent()
+        }
     }
 
-    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
-                           willSpeakRangeOfSpeechString characterRange: NSRange,
-                           utterance: AVSpeechUtterance) {
-        guard fullTextLength > 0 else { return }
-        let end = characterRange.location + characterRange.length
-        progress = Double(end) / Double(fullTextLength)
-    }
-
-    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
-                           didFinish utterance: AVSpeechUtterance) {
-        progress = 1.0
-        state = .idle
-        currentText = ""
-        // Auto-advance queue
-        ReadingQueue.shared.didFinishCurrent()
-    }
-
-    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
-                           didPause utterance: AVSpeechUtterance) {
-        state = .paused
-    }
-
-    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
-                           didContinue utterance: AVSpeechUtterance) {
-        state = .playing
-    }
-
-    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer,
-                           didCancel utterance: AVSpeechUtterance) {
-        state = .idle
+    nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        Task { @MainActor in
+            state = .idle
+            currentText = ""
+        }
     }
 }

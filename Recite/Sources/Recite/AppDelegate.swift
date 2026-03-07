@@ -18,10 +18,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupPopover()
         setupGlobalHotKey()
         subscribeToEngine()
+
+        // Load Qwen3-TTS model in background
+        Task {
+            await engine.loadModel()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        engine.stop()
+        Task { @MainActor in
+            engine.stop()
+        }
         if let monitor = eventMonitor {
             NSEvent.removeMonitor(monitor)
         }
@@ -51,9 +58,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateStatusItemIcon(_ state: SpeechEngine.State) {
         let iconName: String
         switch state {
-        case .playing: iconName = "play.circle.fill"
-        case .paused:  iconName = "pause.circle.fill"
-        case .idle:    iconName = "headphones"
+        case .playing:    iconName = "play.circle.fill"
+        case .paused:     iconName = "pause.circle.fill"
+        case .generating: iconName = "ellipsis.circle.fill"
+        case .loading:    iconName = "arrow.down.circle"
+        case .idle:       iconName = "headphones"
         }
         statusItem.button?.image = NSImage(systemSymbolName: iconName,
                                            accessibilityDescription: "Recite")
@@ -96,19 +105,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "Read Clipboard",
                                 action: #selector(readClipboard), keyEquivalent: ""))
         menu.addItem(.separator())
+
+        // Model status
+        let statusTitle: String
+        switch engine.modelStatus {
+        case .ready: statusTitle = "Qwen3-TTS Ready"
+        case .loading: statusTitle = "Loading Model…"
+        case .downloading: statusTitle = "Downloading Model…"
+        case .notLoaded: statusTitle = "Model Not Loaded"
+        case .error: statusTitle = "Model Error"
+        }
+        let statusItem = NSMenuItem(title: statusTitle, action: nil, keyEquivalent: "")
+        statusItem.isEnabled = false
+        menu.addItem(statusItem)
+
+        menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit Recite",
                                 action: #selector(NSApplication.terminate(_:)),
                                 keyEquivalent: "q"))
         menu.items.forEach { $0.target = self }
-        statusItem.menu = menu
-        statusItem.button?.performClick(nil)
-        statusItem.menu = nil
+        self.statusItem.menu = menu
+        self.statusItem.button?.performClick(nil)
+        self.statusItem.menu = nil
     }
 
     // MARK: - Global Hot Key (⌘⇧R)
 
     private func setupGlobalHotKey() {
-        // Requires Accessibility permission (asked on first use)
         eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
             // ⌘⇧R — keyCode 15 = R
             if event.modifierFlags.contains([.command, .shift]) && event.keyCode == 15 {
@@ -135,9 +158,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func readClipboard() {
         guard let text = NSPasteboard.general.string(forType: .string),
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        queue.add(text: text, source: "Clipboard")
-        if engine.state == .idle {
-            engine.playNext()
+        Task { @MainActor in
+            queue.add(text: text, source: "Clipboard")
+            if engine.state == .idle {
+                engine.playNext()
+            }
         }
     }
 }

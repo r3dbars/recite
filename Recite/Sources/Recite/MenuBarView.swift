@@ -10,6 +10,7 @@ struct MenuBarView: View {
         VStack(spacing: 0) {
             headerSection
             Divider()
+            modelStatusBanner
             playerSection
             Divider()
             queueSection
@@ -44,20 +45,80 @@ struct MenuBarView: View {
         .padding(.vertical, 10)
     }
 
+    // MARK: - Model Status
+
+    @ViewBuilder
+    private var modelStatusBanner: some View {
+        switch engine.modelStatus {
+        case .notLoaded:
+            statusRow(icon: "arrow.down.circle", text: "Model not loaded", color: .orange)
+        case .downloading(let progress):
+            VStack(spacing: 4) {
+                statusRow(icon: "arrow.down.circle", text: "Downloading model…", color: .blue)
+                ProgressView(value: progress)
+                    .progressViewStyle(.linear)
+                    .tint(.blue)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 6)
+            }
+        case .loading:
+            statusRow(icon: "circle.dotted", text: "Loading Qwen3-TTS…", color: .blue)
+        case .ready:
+            EmptyView()
+        case .error(let msg):
+            VStack(spacing: 4) {
+                statusRow(icon: "exclamationmark.triangle", text: "Model error", color: .red)
+                Text(msg)
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+                    .lineLimit(2)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 6)
+                Button("Retry") {
+                    Task { await engine.loadModel() }
+                }
+                .font(.system(size: 11))
+                .padding(.bottom, 6)
+            }
+        }
+    }
+
+    private func statusRow(icon: String, text: String, color: Color) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: icon)
+                .font(.system(size: 10))
+                .foregroundColor(color)
+            Text(text)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(color)
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .background(color.opacity(0.08))
+    }
+
     // MARK: - Player
 
     private var playerSection: some View {
         VStack(spacing: 8) {
-            // Now playing text
             if let item = queue.currentItem {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
-                        Image(systemName: "waveform")
-                            .font(.system(size: 10))
-                            .foregroundColor(.accentColor)
-                        Text(item.source.uppercased())
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(.accentColor)
+                        if engine.state == .generating {
+                            ProgressView()
+                                .controlSize(.mini)
+                            Text("GENERATING…")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(.orange)
+                        } else {
+                            Image(systemName: "waveform")
+                                .font(.system(size: 10))
+                                .foregroundColor(.accentColor)
+                            Text(item.source.uppercased())
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(.accentColor)
+                        }
                     }
                     Text(item.preview)
                         .font(.system(size: 12))
@@ -69,25 +130,29 @@ struct MenuBarView: View {
                 .padding(.horizontal, 14)
                 .padding(.top, 8)
 
-                // Progress bar
                 ProgressView(value: engine.progress)
                     .progressViewStyle(.linear)
-                    .tint(.accentColor)
+                    .tint(engine.state == .generating ? .orange : .accentColor)
                     .padding(.horizontal, 14)
 
             } else {
-                Text(queue.isEmpty ? "Select text and press ⌘⇧R" : "Tap play to start")
-                    .font(.system(size: 12))
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-                    .padding(.vertical, 12)
+                VStack(spacing: 4) {
+                    Text(queue.isEmpty ? "Select text and press ⌘⇧R" : "Tap play to start")
+                        .font(.system(size: 12))
+                        .foregroundColor(.secondary)
+                    if engine.modelStatus == .ready {
+                        Text("Qwen3-TTS ready")
+                            .font(.system(size: 10))
+                            .foregroundColor(.green)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.vertical, 12)
             }
 
             // Playback controls
             HStack(spacing: 16) {
-                // Skip back
                 Button {
-                    // Restart current or go to previous
                     if engine.progress > 0.1, let item = queue.currentItem {
                         queue.play(item: item)
                     }
@@ -96,9 +161,8 @@ struct MenuBarView: View {
                         .font(.system(size: 14))
                 }
                 .buttonStyle(.plain)
-                .disabled(queue.currentItem == nil)
+                .disabled(queue.currentItem == nil || engine.state == .generating)
 
-                // Play / Pause
                 Button {
                     if engine.state == .idle && !queue.isEmpty {
                         queue.playNext()
@@ -106,14 +170,13 @@ struct MenuBarView: View {
                         engine.togglePlayPause()
                     }
                 } label: {
-                    Image(systemName: engine.state == .playing ? "pause.circle.fill" : "play.circle.fill")
+                    Image(systemName: playButtonIcon)
                         .font(.system(size: 32))
-                        .foregroundColor(queue.isEmpty && engine.state == .idle ? .secondary : .accentColor)
+                        .foregroundColor(playButtonColor)
                 }
                 .buttonStyle(.plain)
-                .disabled(queue.isEmpty && engine.state == .idle)
+                .disabled((queue.isEmpty && engine.state == .idle) || engine.modelStatus != .ready)
 
-                // Skip forward
                 Button {
                     engine.playNext()
                 } label: {
@@ -121,19 +184,19 @@ struct MenuBarView: View {
                         .font(.system(size: 14))
                 }
                 .buttonStyle(.plain)
-                .disabled(queue.currentIndex == nil)
+                .disabled(queue.currentIndex == nil || engine.state == .generating)
 
                 Spacer()
 
                 // Speed control
                 Menu {
-                    ForEach([0.4, 0.5, 0.6, 0.7, 0.8, 1.0], id: \.self) { spd in
+                    ForEach([0.5, 0.75, 1.0, 1.25, 1.5, 2.0], id: \.self) { spd in
                         Button(speedLabel(spd)) {
-                            engine.updateRate(Float(spd))
+                            engine.updateSpeed(spd)
                         }
                     }
                 } label: {
-                    Text(speedLabel(Double(engine.rate)))
+                    Text(speedLabel(engine.speed))
                         .font(.system(size: 11, weight: .medium))
                         .foregroundColor(.secondary)
                 }
@@ -143,6 +206,20 @@ struct MenuBarView: View {
             .padding(.horizontal, 14)
             .padding(.bottom, 8)
         }
+    }
+
+    private var playButtonIcon: String {
+        switch engine.state {
+        case .playing: return "pause.circle.fill"
+        case .generating: return "hourglass.circle.fill"
+        default: return "play.circle.fill"
+        }
+    }
+
+    private var playButtonColor: Color {
+        if engine.state == .generating { return .orange }
+        if queue.isEmpty && engine.state == .idle { return .secondary }
+        return .accentColor
     }
 
     // MARK: - Queue
@@ -194,7 +271,6 @@ struct MenuBarView: View {
 
     private var footerSection: some View {
         HStack {
-            // Add clipboard button
             Button {
                 if let text = NSPasteboard.general.string(forType: .string), !text.isEmpty {
                     queue.add(text: text, source: "Clipboard")
@@ -222,8 +298,9 @@ struct MenuBarView: View {
     // MARK: - Helpers
 
     private func speedLabel(_ rate: Double) -> String {
-        let pct = Int((rate / Double(AVSpeechUtteranceDefaultSpeechRate)) * 100)
-        return "\(pct)%"
+        if rate == 1.0 { return "1x" }
+        if rate == floor(rate) { return "\(Int(rate))x" }
+        return String(format: "%.2gx", rate)
     }
 }
 
@@ -270,35 +347,41 @@ struct SettingsView: View {
             Text("Settings")
                 .font(.headline)
 
+            // Model info
             VStack(alignment: .leading, spacing: 4) {
-                Text("Voice")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.secondary)
-                Picker("Voice", selection: $engine.selectedVoiceIdentifier) {
-                    ForEach(engine.availableVoices, id: \.identifier) { voice in
-                        Text("\(voice.name) (\(voice.language))")
-                            .tag(voice.identifier)
-                    }
-                }
-                .labelsHidden()
-            }
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text("Speed")
+                Text("Voice Model")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(.secondary)
                 HStack {
-                    Text("Slow")
+                    Image(systemName: "brain")
+                        .font(.system(size: 12))
+                    Text("Qwen3-TTS 0.6B (8-bit)")
+                        .font(.system(size: 12))
+                }
+                Text("Multilingual neural TTS via MLX")
+                    .font(.system(size: 10))
+                    .foregroundColor(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Playback Speed")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.secondary)
+                HStack {
+                    Text("0.5x")
                         .font(.system(size: 10))
                         .foregroundColor(.secondary)
-                    Slider(value: $engine.rate, in: 0.3...0.9)
-                    Text("Fast")
+                    Slider(value: Binding(
+                        get: { engine.speed },
+                        set: { engine.updateSpeed($0) }
+                    ), in: 0.5...2.0, step: 0.25)
+                    Text("2x")
                         .font(.system(size: 10))
                         .foregroundColor(.secondary)
                 }
             }
 
-            Text("Global hotkey: ⌘⇧R\nRequires Accessibility permission.")
+            Text("Global hotkey: ⌘⇧R\nRequires Accessibility permission.\n\nPowered by mlx-audio-swift\n100% on-device · Apple Silicon")
                 .font(.system(size: 10))
                 .foregroundColor(.secondary)
         }
