@@ -1,6 +1,9 @@
 import AppKit
 import ApplicationServices
 import Combine
+import os.log
+
+private let log = Logger(subsystem: "com.r3dbars.recite", category: "TextGrabber")
 
 /// Grabs selected text from the frontmost application.
 /// Strategy:
@@ -12,18 +15,55 @@ class TextGrabber: ObservableObject {
 
     // MARK: - Public
 
-    func getSelectedText() async -> String? {
+    /// Call this synchronously from the hotkey handler to capture the source app
+    /// before any async work or focus changes.
+    func captureSourceApp() -> pid_t? {
+        let app = NSWorkspace.shared.frontmostApplication
+        log.info("Captured source app: \(app?.localizedName ?? "none") (pid \(app?.processIdentifier ?? 0))")
+        return app?.processIdentifier
+    }
+
+    func getSelectedText(fromPID pid: pid_t?) async -> String? {
+        log.info("getSelectedText(fromPID: \(pid ?? 0)) called")
+        log.info("AXIsProcessTrusted: \(AXIsProcessTrusted())")
+
         // Try Accessibility first
-        if let text = getTextViaAccessibility(), !text.isEmpty {
+        if let pid, let text = getTextViaAccessibility(pid: pid), !text.isEmpty {
+            log.info("Got text via accessibility (\(text.count) chars)")
             return text
         }
+        log.info("Accessibility returned nothing, falling back to clipboard simulation")
+
         // Fall back to clipboard simulation
-        return await getTextViaClipboard()
+        let clipText = await getTextViaClipboard()
+        if let clipText, !clipText.isEmpty {
+            log.info("Got text via clipboard (\(clipText.count) chars)")
+            return clipText
+        }
+
+        // Last resort: read whatever is already on the clipboard
+        // (user may have manually copied before pressing hotkey)
+        let existing = readClipboardText()
+        if let existing, !existing.isEmpty {
+            log.info("Using existing clipboard content (\(existing.count) chars)")
+            return existing
+        }
+
+        log.warning("No text found from any method")
+        return nil
+    }
+
+    /// Read plain text from the current clipboard contents
+    private func readClipboardText() -> String? {
+        let pasteboard = NSPasteboard.general
+        return pasteboard.string(forType: .string)
+            ?? pasteboard.string(forType: NSPasteboard.PasteboardType("public.utf8-plain-text"))
     }
 
     func requestAccessibilityPermission() {
         let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true]
-        AXIsProcessTrustedWithOptions(options as CFDictionary)
+        let trusted = AXIsProcessTrustedWithOptions(options as CFDictionary)
+        log.info("requestAccessibilityPermission: trusted=\(trusted)")
     }
 
     var hasAccessibilityPermission: Bool {
@@ -32,59 +72,138 @@ class TextGrabber: ObservableObject {
 
     // MARK: - Accessibility
 
-    private func getTextViaAccessibility() -> String? {
-        guard AXIsProcessTrusted() else { return nil }
+    private func getTextViaAccessibility(pid: pid_t) -> String? {
+        guard AXIsProcessTrusted() else {
+            log.warning("AX not trusted, skipping accessibility grab")
+            return nil
+        }
 
-        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
-        let axApp = AXUIElementCreateApplication(app.processIdentifier)
+        log.info("Querying AX for pid \(pid)")
+        let axApp = AXUIElementCreateApplication(pid)
 
         var focusedElement: AnyObject?
-        guard AXUIElementCopyAttributeValue(axApp, kAXFocusedUIElementAttribute as CFString,
-                                             &focusedElement) == .success,
-              let element = focusedElement else { return nil }
+        let focusResult = AXUIElementCopyAttributeValue(axApp, kAXFocusedUIElementAttribute as CFString,
+                                                         &focusedElement)
+        guard focusResult == .success, let element = focusedElement else {
+            log.warning("Failed to get focused element: AXError code \(focusResult.rawValue)")
+            return nil
+        }
+
+        // Log the role of the focused element
+        var role: AnyObject?
+        AXUIElementCopyAttributeValue(element as! AXUIElement, kAXRoleAttribute as CFString, &role)
+        log.info("Focused element role: \(role as? String ?? "unknown")")
 
         var selectedText: AnyObject?
-        guard AXUIElementCopyAttributeValue(element as! AXUIElement,
-                                             kAXSelectedTextAttribute as CFString,
-                                             &selectedText) == .success else { return nil }
+        let textResult = AXUIElementCopyAttributeValue(element as! AXUIElement,
+                                                        kAXSelectedTextAttribute as CFString,
+                                                        &selectedText)
+        guard textResult == .success else {
+            log.warning("Failed to get selected text: AXError code \(textResult.rawValue)")
+            return nil
+        }
 
-        return selectedText as? String
+        let text = selectedText as? String
+        log.info("AX selected text: \(text ?? "nil") (\(text?.count ?? 0) chars)")
+        return text
     }
 
     // MARK: - Clipboard Simulation
 
     private func getTextViaClipboard() async -> String? {
         let pasteboard = NSPasteboard.general
+        log.info("Starting clipboard simulation")
 
         // Save current clipboard state
         let savedChangeCount = pasteboard.changeCount
         let savedStrings = pasteboard.pasteboardItems?.compactMap {
             $0.string(forType: .string)
         }
+        log.info("Saved clipboard changeCount=\(savedChangeCount), items=\(savedStrings?.count ?? 0)")
 
         // Clear and trigger ⌘C in frontmost app
         pasteboard.clearContents()
 
         let src = CGEventSource(stateID: .hidSystemState)
+        log.info("CGEventSource created: \(src != nil)")
+
         // Key code 8 = C
         let cDown = CGEvent(keyboardEventSource: src, virtualKey: 0x08, keyDown: true)
         cDown?.flags = .maskCommand
         cDown?.post(tap: .cghidEventTap)
+        log.info("Posted ⌘C keyDown")
 
         let cUp = CGEvent(keyboardEventSource: src, virtualKey: 0x08, keyDown: false)
         cUp?.flags = .maskCommand
         cUp?.post(tap: .cghidEventTap)
+        log.info("Posted ⌘C keyUp")
 
-        // Poll for clipboard update (max 300ms)
-        let deadline = Date().addingTimeInterval(0.3)
+        // Poll for clipboard update (max 500ms)
+        let deadline = Date().addingTimeInterval(0.5)
+        var pollCount = 0
         while Date() < deadline {
             try? await Task.sleep(nanoseconds: 30_000_000) // 30ms
+            pollCount += 1
             if pasteboard.changeCount != savedChangeCount {
+                log.info("Clipboard changed after \(pollCount) polls")
                 break
             }
         }
 
-        let grabbed = pasteboard.string(forType: .string)
+        // Check all common text types — Chrome often copies as rich text without plain text
+        let types = pasteboard.types ?? []
+        let typeNames = types.map(\.rawValue).joined(separator: ", ")
+        log.warning("Clipboard types: \(typeNames, privacy: .public)")
+
+        // Try multiple pasteboard types in order of preference
+        let textTypes: [NSPasteboard.PasteboardType] = [
+            .string,
+            NSPasteboard.PasteboardType("public.utf8-plain-text"),
+            NSPasteboard.PasteboardType("public.utf16-plain-text"),
+            .rtf,
+        ]
+
+        var grabbed: String? = nil
+        for type in textTypes {
+            if let text = pasteboard.string(forType: type), !text.isEmpty {
+                log.info("Found text via type '\(type.rawValue)' (\(text.count) chars)")
+                grabbed = text
+                break
+            }
+        }
+
+        // Last resort: try reading from pasteboard items directly
+        if grabbed == nil {
+            if let items = pasteboard.pasteboardItems {
+                for item in items {
+                    let itemTypeNames = item.types.map(\.rawValue).joined(separator: ", ")
+                    log.warning("Pasteboard item types: \(itemTypeNames, privacy: .public)")
+                    for type in item.types {
+                        if let text = item.string(forType: type), !text.isEmpty {
+                            // Skip HTML markup, prefer plain text
+                            if type.rawValue.contains("html") || type.rawValue.contains("rtf") {
+                                // Strip HTML tags as last resort
+                                let stripped = text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+                                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                                if !stripped.isEmpty {
+                                    log.info("Stripped HTML/RTF from type '\(type.rawValue)' (\(stripped.count) chars)")
+                                    grabbed = stripped
+                                    break
+                                }
+                            } else {
+                                log.info("Found text via item type '\(type.rawValue)' (\(text.count) chars)")
+                                grabbed = text
+                                break
+                            }
+                        }
+                    }
+                    if grabbed != nil { break }
+                }
+            }
+        }
+
+        let grabSummary = grabbed != nil ? "\(grabbed!.count) chars: \(String(grabbed!.prefix(80)))" : "nil"
+        log.warning("Grabbed from clipboard: \(grabSummary, privacy: .public) (changeCount=\(pasteboard.changeCount), polls=\(pollCount))")
 
         // Restore original clipboard
         pasteboard.clearContents()

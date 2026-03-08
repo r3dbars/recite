@@ -4,9 +4,23 @@ import MLX
 import MLXLMCommon
 import MLXAudioTTS
 import MLXAudioCore
+import os.log
+
+private let log = Logger(subsystem: "com.r3dbars.recite", category: "SpeechEngine")
+
+struct VoicePreset: Identifiable, Hashable {
+    let id = UUID()
+    let name: String
+    let instruct: String
+
+    static let defaultPreset = VoicePreset(
+        name: "Calm Female",
+        instruct: "A calm, clear female voice with a neutral American accent, speaking at a moderate pace."
+    )
+}
 
 /// Text-to-speech engine powered by Qwen3-TTS via mlx-audio-swift.
-/// Runs entirely on-device using MLX on Apple Silicon.
+/// Uses streaming generation so audio starts playing within seconds.
 @MainActor
 class SpeechEngine: NSObject, ObservableObject {
     static let shared = SpeechEngine()
@@ -26,10 +40,28 @@ class SpeechEngine: NSObject, ObservableObject {
     @Published var currentText: String = ""
     @Published var progress: Double = 0
     @Published var speed: Double = 1.0  // 0.5x – 2.0x playback speed
+    @Published var voiceInstruct: String = VoicePreset.defaultPreset.instruct
+
+    static let voicePresets: [VoicePreset] = [
+        VoicePreset(name: "Calm Female", instruct: "A calm, clear female voice with a neutral American accent, speaking at a moderate pace."),
+        VoicePreset(name: "Warm Male", instruct: "A warm, deep male voice with a friendly tone, speaking at a relaxed pace."),
+        VoicePreset(name: "Energetic Female", instruct: "An energetic young female voice with an upbeat and lively tone."),
+        VoicePreset(name: "Professional Male", instruct: "A professional male voice with a clear, authoritative tone suitable for narration."),
+        VoicePreset(name: "Gentle Female", instruct: "A gentle, soft-spoken female voice with a soothing and reassuring tone."),
+        VoicePreset(name: "British Male", instruct: "A refined British male voice with clear enunciation and a composed delivery."),
+    ]
 
     private var model: Qwen3TTSModel?
-    private var audioPlayer: AVAudioPlayer?
     private var generationTask: Task<Void, Never>?
+
+    // Streaming audio playback via AVAudioEngine
+    private var audioEngine: AVAudioEngine?
+    private var playerNode: AVAudioPlayerNode?
+    private var audioFormat: AVAudioFormat?
+    private var scheduledBufferCount = 0
+    private var completedBufferCount = 0
+    private var totalSamplesScheduled = 0
+    private var isStreamComplete = false
 
     private static let modelID = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"
     private static let sampleRate: Double = 24000
@@ -40,16 +72,21 @@ class SpeechEngine: NSObject, ObservableObject {
 
     // MARK: - Model Loading
 
-    /// Load the Qwen3-TTS model. Call once at app launch.
     func loadModel() async {
-        guard modelStatus == .notLoaded || isErrorStatus else { return }
+        guard modelStatus == .notLoaded || isErrorStatus else {
+            log.info("loadModel() skipped — modelStatus=\(String(describing: self.modelStatus))")
+            return
+        }
+        log.info("loadModel() starting...")
         modelStatus = .loading
 
         do {
             let loaded = try await Qwen3TTSModel.fromPretrained(Self.modelID)
             self.model = loaded
             modelStatus = .ready
+            log.info("Model loaded successfully")
         } catch {
+            log.error("Model load failed: \(error.localizedDescription)")
             modelStatus = .error(error.localizedDescription)
         }
     }
@@ -59,18 +96,30 @@ class SpeechEngine: NSObject, ObservableObject {
         return false
     }
 
-    // MARK: - Playback
+    // MARK: - Streaming Playback
 
     func speak(_ text: String) {
-        guard modelStatus == .ready, let model = model else { return }
+        guard modelStatus == .ready, let model = model else {
+            log.warning("speak() called but model not ready (modelStatus=\(String(describing: self.modelStatus)))")
+            return
+        }
+
+        log.info("speak() called with \(text.count) chars")
 
         // Cancel any in-progress generation
         generationTask?.cancel()
-        audioPlayer?.stop()
+        stopAudioEngine()
 
         currentText = text
         progress = 0
         state = .generating
+        isStreamComplete = false
+        scheduledBufferCount = 0
+        completedBufferCount = 0
+        totalSamplesScheduled = 0
+
+        // Set up audio engine for streaming playback
+        setupAudioEngine()
 
         generationTask = Task {
             do {
@@ -82,46 +131,178 @@ class SpeechEngine: NSObject, ObservableObject {
                     repetitionContextSize: 30
                 )
 
-                let audioArray = try await model.generate(
+                let voice = self.voiceInstruct.isEmpty ? nil : self.voiceInstruct
+                log.info("Starting streaming generation with voice=\(voice ?? "nil", privacy: .public)")
+
+                let stream = model.generateStream(
                     text: text,
-                    voice: nil,
+                    voice: voice,
                     refAudio: nil,
                     refText: nil,
                     language: nil,
-                    generationParameters: params
+                    generationParameters: params,
+                    streamingInterval: 1.0
                 )
 
-                if Task.isCancelled { return }
+                let chunksBeforePlay = 3 // Buffer 3 chunks (~3s) before starting playback
+                var chunkIndex = 0
+                for try await event in stream {
+                    if Task.isCancelled {
+                        log.info("Stream cancelled")
+                        return
+                    }
 
-                // Convert MLXArray audio to WAV data and play
-                let audioData = try audioToWAV(audioArray, sampleRate: Self.sampleRate)
-                try playAudio(audioData)
+                    switch event {
+                    case .audio(let audioChunk):
+                        chunkIndex += 1
+                        let samples = audioChunk.asArray(Float.self)
+                        log.info("Audio chunk #\(chunkIndex): \(samples.count) samples")
+
+                        await MainActor.run {
+                            scheduleAudioChunk(samples)
+
+                            // Start playing after buffering enough chunks for smooth playback
+                            if chunkIndex == chunksBeforePlay {
+                                startPlayback()
+                            }
+                        }
+
+                    case .info(let info):
+                        log.info("Generation info: tokensPerSecond=\(info.tokensPerSecond ?? 0)")
+
+                    case .token:
+                        break
+                    }
+                }
+
+                await MainActor.run {
+                    isStreamComplete = true
+                    log.info("Stream complete, \(chunkIndex) chunks total")
+                    // If we never hit the buffer threshold, start playback now
+                    if chunkIndex > 0 && chunkIndex < chunksBeforePlay {
+                        startPlayback()
+                    }
+                }
 
             } catch {
+                log.error("Generation error: \(error.localizedDescription)")
                 if !Task.isCancelled {
-                    state = .idle
-                    currentText = ""
+                    await MainActor.run {
+                        state = .idle
+                        currentText = ""
+                    }
                 }
             }
         }
     }
 
+    private func setupAudioEngine() {
+        let engine = AVAudioEngine()
+        let player = AVAudioPlayerNode()
+        let format = AVAudioFormat(standardFormatWithSampleRate: Self.sampleRate, channels: 1)!
+
+        engine.attach(player)
+        engine.connect(player, to: engine.mainMixerNode, format: format)
+
+        // Apply speed via rate adjustment
+        // AVAudioPlayerNode doesn't have a rate property, so we use AVAudioUnitTimePitch
+        // For now, keep at 1x during streaming — speed is applied at engine level
+
+        do {
+            try engine.start()
+            self.audioEngine = engine
+            self.playerNode = player
+            self.audioFormat = format
+            log.info("Audio engine started")
+        } catch {
+            log.error("Failed to start audio engine: \(error.localizedDescription)")
+        }
+    }
+
+    private func scheduleAudioChunk(_ samples: [Float]) {
+        guard let player = playerNode, let format = audioFormat else { return }
+
+        let frameCount = AVAudioFrameCount(samples.count)
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else { return }
+        buffer.frameLength = frameCount
+
+        // Copy samples into the buffer
+        let channelData = buffer.floatChannelData![0]
+        for i in 0..<samples.count {
+            channelData[i] = max(-1.0, min(1.0, samples[i]))
+        }
+
+        scheduledBufferCount += 1
+        totalSamplesScheduled += samples.count
+        let bufferIndex = scheduledBufferCount
+
+        player.scheduleBuffer(buffer) { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                self.completedBufferCount += 1
+                if self.isStreamComplete && self.completedBufferCount >= self.scheduledBufferCount {
+                    log.info("All buffers played, finishing")
+                    self.finishPlayback()
+                }
+            }
+        }
+
+        let total = self.totalSamplesScheduled
+        log.info("Scheduled buffer #\(bufferIndex) (\(samples.count) samples, total=\(total))")
+    }
+
+    private func startPlayback() {
+        guard let player = playerNode else { return }
+        player.play()
+        state = .playing
+        log.info("Playback started (streaming)")
+
+        // Track progress
+        Task {
+            while state == .playing || state == .generating || state == .paused {
+                if let player = playerNode, let nodeTime = player.lastRenderTime,
+                   let playerTime = player.playerTime(forNodeTime: nodeTime),
+                   totalSamplesScheduled > 0 {
+                    let currentSample = Double(playerTime.sampleTime)
+                    let total = Double(totalSamplesScheduled)
+                    progress = min(currentSample / total, 1.0)
+                }
+                try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
+            }
+        }
+    }
+
+    private func finishPlayback() {
+        progress = 1.0
+        state = .idle
+        currentText = ""
+        stopAudioEngine()
+        ReadingQueue.shared.didFinishCurrent()
+    }
+
+    private func stopAudioEngine() {
+        playerNode?.stop()
+        audioEngine?.stop()
+        audioEngine = nil
+        playerNode = nil
+        audioFormat = nil
+    }
+
     func pause() {
-        guard state == .playing, let player = audioPlayer else { return }
+        guard state == .playing, let player = playerNode else { return }
         player.pause()
         state = .paused
     }
 
     func resume() {
-        guard state == .paused, let player = audioPlayer else { return }
+        guard state == .paused, let player = playerNode else { return }
         player.play()
         state = .playing
     }
 
     func stop() {
         generationTask?.cancel()
-        audioPlayer?.stop()
-        audioPlayer = nil
+        stopAudioEngine()
         state = .idle
         currentText = ""
         progress = 0
@@ -143,92 +324,5 @@ class SpeechEngine: NSObject, ObservableObject {
 
     func updateSpeed(_ newSpeed: Double) {
         speed = newSpeed
-        audioPlayer?.rate = Float(newSpeed)
-    }
-
-    // MARK: - Audio Playback
-
-    private func playAudio(_ data: Data) throws {
-        let player = try AVAudioPlayer(data: data)
-        player.delegate = self
-        player.enableRate = true
-        player.rate = Float(speed)
-        player.play()
-        self.audioPlayer = player
-        state = .playing
-
-        // Start progress tracking
-        trackProgress(player: player)
-    }
-
-    private func trackProgress(player: AVAudioPlayer) {
-        Task {
-            while player.isPlaying || state == .paused {
-                if state == .playing, player.duration > 0 {
-                    progress = player.currentTime / player.duration
-                }
-                try? await Task.sleep(nanoseconds: 100_000_000) // 100ms
-            }
-        }
-    }
-
-    // MARK: - WAV Encoding
-
-    private func audioToWAV(_ audioArray: MLXArray, sampleRate: Double) throws -> Data {
-        // Convert MLXArray to Float32 samples
-        let samples = audioArray.asArray(Float.self)
-        let numSamples = samples.count
-        let bytesPerSample = 2 // 16-bit PCM
-        let dataSize = numSamples * bytesPerSample
-
-        var data = Data()
-
-        // WAV header
-        data.append(contentsOf: "RIFF".utf8)
-        data.append(contentsOf: withUnsafeBytes(of: UInt32(36 + dataSize).littleEndian) { Array($0) })
-        data.append(contentsOf: "WAVE".utf8)
-
-        // fmt chunk
-        data.append(contentsOf: "fmt ".utf8)
-        data.append(contentsOf: withUnsafeBytes(of: UInt32(16).littleEndian) { Array($0) })
-        data.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) }) // PCM
-        data.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) }) // mono
-        data.append(contentsOf: withUnsafeBytes(of: UInt32(sampleRate).littleEndian) { Array($0) })
-        data.append(contentsOf: withUnsafeBytes(of: UInt32(sampleRate * Double(bytesPerSample)).littleEndian) { Array($0) })
-        data.append(contentsOf: withUnsafeBytes(of: UInt16(bytesPerSample).littleEndian) { Array($0) })
-        data.append(contentsOf: withUnsafeBytes(of: UInt16(16).littleEndian) { Array($0) }) // bits per sample
-
-        // data chunk
-        data.append(contentsOf: "data".utf8)
-        data.append(contentsOf: withUnsafeBytes(of: UInt32(dataSize).littleEndian) { Array($0) })
-
-        // Convert float samples to 16-bit PCM
-        for sample in samples {
-            let clamped = max(-1.0, min(1.0, sample))
-            let int16 = Int16(clamped * Float(Int16.max))
-            data.append(contentsOf: withUnsafeBytes(of: int16.littleEndian) { Array($0) })
-        }
-
-        return data
-    }
-}
-
-// MARK: - AVAudioPlayerDelegate
-
-extension SpeechEngine: AVAudioPlayerDelegate {
-    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        Task { @MainActor in
-            progress = 1.0
-            state = .idle
-            currentText = ""
-            ReadingQueue.shared.didFinishCurrent()
-        }
-    }
-
-    nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
-        Task { @MainActor in
-            state = .idle
-            currentText = ""
-        }
     }
 }

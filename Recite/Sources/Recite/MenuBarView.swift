@@ -340,15 +340,76 @@ struct QueueItemRow: View {
 
 struct SettingsView: View {
     @StateObject private var engine = SpeechEngine.shared
+    @State private var customVoice: String = ""
+    @State private var showCustomField = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Settings")
                 .font(.headline)
 
+            // Voice picker
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Voice")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.secondary)
+
+                ForEach(SpeechEngine.voicePresets) { preset in
+                    Button {
+                        engine.voiceInstruct = preset.instruct
+                        showCustomField = false
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: engine.voiceInstruct == preset.instruct && !showCustomField
+                                  ? "checkmark.circle.fill" : "circle")
+                                .font(.system(size: 12))
+                                .foregroundColor(engine.voiceInstruct == preset.instruct && !showCustomField
+                                                 ? .accentColor : .secondary)
+                            Text(preset.name)
+                                .font(.system(size: 12))
+                                .foregroundColor(.primary)
+                            Spacer()
+                        }
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Button {
+                    showCustomField.toggle()
+                    if showCustomField {
+                        customVoice = engine.voiceInstruct
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: showCustomField ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 12))
+                            .foregroundColor(showCustomField ? .accentColor : .secondary)
+                        Text("Custom…")
+                            .font(.system(size: 12))
+                            .foregroundColor(.primary)
+                        Spacer()
+                    }
+                }
+                .buttonStyle(.plain)
+
+                if showCustomField {
+                    TextField("Describe the voice you want…", text: $customVoice)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 11))
+                        .onSubmit {
+                            engine.voiceInstruct = customVoice
+                        }
+                    Text("e.g. \"A warm British female voice with a storytelling tone\"")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            Divider()
+
             // Model info
             VStack(alignment: .leading, spacing: 4) {
-                Text("Voice Model")
+                Text("Model")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(.secondary)
                 HStack {
@@ -357,9 +418,6 @@ struct SettingsView: View {
                     Text("Qwen3-TTS 0.6B (8-bit)")
                         .font(.system(size: 12))
                 }
-                Text("Multilingual neural TTS via MLX")
-                    .font(.system(size: 10))
-                    .foregroundColor(.secondary)
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -380,11 +438,11 @@ struct SettingsView: View {
                 }
             }
 
-            Text("Global hotkey: ⌘⇧R\nRequires Accessibility permission.\n\nPowered by mlx-audio-swift\n100% on-device · Apple Silicon")
+            Text("Global hotkey: ⌘⇧R\n100% on-device · Apple Silicon")
                 .font(.system(size: 10))
                 .foregroundColor(.secondary)
         }
         .padding()
-        .frame(width: 260)
+        .frame(width: 280)
     }
 }
