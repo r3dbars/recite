@@ -339,7 +339,7 @@ struct QueueItemRow: View {
 // MARK: - Settings
 
 struct SettingsView: View {
-    @StateObject private var engine = SpeechEngine.shared
+    @ObservedObject private var engine = SpeechEngine.shared
     @State private var customVoice: String = ""
     @State private var showCustomField = false
 

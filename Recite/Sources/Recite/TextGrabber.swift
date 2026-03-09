@@ -114,15 +114,18 @@ class TextGrabber: ObservableObject {
         let pasteboard = NSPasteboard.general
         log.info("Starting clipboard simulation")
 
-        // Save current clipboard state
-        let savedChangeCount = pasteboard.changeCount
+        // Save current clipboard content for restoration later
         let savedStrings = pasteboard.pasteboardItems?.compactMap {
             $0.string(forType: .string)
         }
-        log.info("Saved clipboard changeCount=\(savedChangeCount), items=\(savedStrings?.count ?? 0)")
+        log.info("Saved clipboard items=\(savedStrings?.count ?? 0)")
 
-        // Clear and trigger ⌘C in frontmost app
+        // Clear clipboard FIRST, then save the changeCount.
+        // clearContents() itself increments changeCount, so we must save AFTER
+        // to avoid detecting our own clear as a "change" from the ⌘C.
         pasteboard.clearContents()
+        let savedChangeCount = pasteboard.changeCount
+        log.info("Cleared clipboard, changeCount=\(savedChangeCount)")
 
         let src = CGEventSource(stateID: .hidSystemState)
         log.info("CGEventSource created: \(src != nil)")
@@ -138,11 +141,14 @@ class TextGrabber: ObservableObject {
         cUp?.post(tap: .cghidEventTap)
         log.info("Posted ⌘C keyUp")
 
-        // Poll for clipboard update (max 500ms)
-        let deadline = Date().addingTimeInterval(0.5)
+        // Give the source app a moment to process the ⌘C
+        try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
+
+        // Poll for clipboard update (max 1s — Chrome can be slow)
+        let deadline = Date().addingTimeInterval(1.0)
         var pollCount = 0
         while Date() < deadline {
-            try? await Task.sleep(nanoseconds: 30_000_000) // 30ms
+            try? await Task.sleep(nanoseconds: 50_000_000) // 50ms
             pollCount += 1
             if pasteboard.changeCount != savedChangeCount {
                 log.info("Clipboard changed after \(pollCount) polls")

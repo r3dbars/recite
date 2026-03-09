@@ -40,7 +40,9 @@ class SpeechEngine: NSObject, ObservableObject {
     @Published var currentText: String = ""
     @Published var progress: Double = 0
     @Published var speed: Double = 1.0  // 0.5x – 2.0x playback speed
-    @Published var voiceInstruct: String = VoicePreset.defaultPreset.instruct
+    @Published var voiceInstruct: String = VoicePreset.defaultPreset.instruct {
+        didSet { log.info("Voice changed to: \(self.voiceInstruct)") }
+    }
 
     static let voicePresets: [VoicePreset] = [
         VoicePreset(name: "Calm Female", instruct: "A calm, clear female voice with a neutral American accent, speaking at a moderate pace."),
@@ -53,6 +55,9 @@ class SpeechEngine: NSObject, ObservableObject {
 
     private var model: Qwen3TTSModel?
     private var generationTask: Task<Void, Never>?
+
+    // Generation ID: incremented on each speak() call so stale callbacks are ignored
+    private var generationID: UInt64 = 0
 
     // Streaming audio playback via AVAudioEngine
     private var audioEngine: AVAudioEngine?
@@ -118,6 +123,11 @@ class SpeechEngine: NSObject, ObservableObject {
         completedBufferCount = 0
         totalSamplesScheduled = 0
 
+        // Increment generation ID so stale callbacks from previous speak() are ignored
+        generationID &+= 1
+        let myGenID = generationID
+        log.info("Starting generation #\(myGenID)")
+
         // Set up audio engine for streaming playback
         setupAudioEngine()
 
@@ -144,7 +154,7 @@ class SpeechEngine: NSObject, ObservableObject {
                     streamingInterval: 1.0
                 )
 
-                let chunksBeforePlay = 3 // Buffer 3 chunks (~3s) before starting playback
+                let chunksBeforePlay = 5 // Buffer 5 chunks (~4.8s) before starting playback
                 var chunkIndex = 0
                 for try await event in stream {
                     if Task.isCancelled {
@@ -156,9 +166,10 @@ class SpeechEngine: NSObject, ObservableObject {
                     case .audio(let audioChunk):
                         chunkIndex += 1
                         let samples = audioChunk.asArray(Float.self)
-                        log.info("Audio chunk #\(chunkIndex): \(samples.count) samples")
+                        log.info("Audio chunk #\(chunkIndex): \(samples.count) samples (gen #\(myGenID))")
 
                         await MainActor.run {
+                            guard self.generationID == myGenID else { return }
                             scheduleAudioChunk(samples)
 
                             // Start playing after buffering enough chunks for smooth playback
@@ -176,8 +187,13 @@ class SpeechEngine: NSObject, ObservableObject {
                 }
 
                 await MainActor.run {
+                    // Only mark complete if this is still the active generation
+                    guard self.generationID == myGenID else {
+                        log.info("Stream complete for stale generation #\(myGenID), ignoring")
+                        return
+                    }
                     isStreamComplete = true
-                    log.info("Stream complete, \(chunkIndex) chunks total")
+                    log.info("Stream complete, \(chunkIndex) chunks total (gen #\(myGenID))")
                     // If we never hit the buffer threshold, start playback now
                     if chunkIndex > 0 && chunkIndex < chunksBeforePlay {
                         startPlayback()
@@ -188,6 +204,7 @@ class SpeechEngine: NSObject, ObservableObject {
                 log.error("Generation error: \(error.localizedDescription)")
                 if !Task.isCancelled {
                     await MainActor.run {
+                        guard self.generationID == myGenID else { return }
                         state = .idle
                         currentText = ""
                     }
@@ -236,12 +253,15 @@ class SpeechEngine: NSObject, ObservableObject {
         totalSamplesScheduled += samples.count
         let bufferIndex = scheduledBufferCount
 
+        let expectedGenID = self.generationID
         player.scheduleBuffer(buffer) { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
+                // Ignore callbacks from a previous generation
+                guard self.generationID == expectedGenID else { return }
                 self.completedBufferCount += 1
                 if self.isStreamComplete && self.completedBufferCount >= self.scheduledBufferCount {
-                    log.info("All buffers played, finishing")
+                    log.info("All buffers played, finishing (gen #\(expectedGenID))")
                     self.finishPlayback()
                 }
             }
