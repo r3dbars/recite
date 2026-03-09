@@ -68,7 +68,7 @@ class SpeechEngine: NSObject, ObservableObject {
     private var totalSamplesScheduled = 0
     private var isStreamComplete = false
 
-    private static let modelID = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"
+    private static let modelID = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit"
     private static let sampleRate: Double = 24000
 
     override init() {
