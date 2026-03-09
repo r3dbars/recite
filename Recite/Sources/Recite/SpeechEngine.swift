@@ -68,8 +68,9 @@ class SpeechEngine: NSObject, ObservableObject {
     private var totalSamplesScheduled = 0
     private var isStreamComplete = false
 
-    private static let modelID = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-4bit"
+    private static let modelID = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"
     private static let sampleRate: Double = 24000
+    private static let samplesPerChunk: Int = 23040  // ~0.96s at 24kHz (from streamingInterval=1.0)
 
     override init() {
         super.init()
@@ -154,7 +155,12 @@ class SpeechEngine: NSObject, ObservableObject {
                     streamingInterval: 1.0
                 )
 
-                let chunksBeforePlay = 5 // Buffer 5 chunks (~4.8s) before starting playback
+                // Start playback after 5 chunks (~5s buffer). If generation
+                // can't keep up, we'll pause mid-playback with "Buffering..." rather
+                // than making the user wait 15-20s upfront.
+                let chunksBeforePlay = 5
+                log.info("Buffer: start after \(chunksBeforePlay) chunks (~\(chunksBeforePlay * Int(Self.samplesPerChunk) / Int(Self.sampleRate))s)")
+
                 var chunkIndex = 0
                 for try await event in stream {
                     if Task.isCancelled {
@@ -257,13 +263,29 @@ class SpeechEngine: NSObject, ObservableObject {
         player.scheduleBuffer(buffer) { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
-                // Ignore callbacks from a previous generation
                 guard self.generationID == expectedGenID else { return }
                 self.completedBufferCount += 1
-                if self.isStreamComplete && self.completedBufferCount >= self.scheduledBufferCount {
-                    log.info("All buffers played, finishing (gen #\(expectedGenID))")
-                    self.finishPlayback()
+                if self.completedBufferCount >= self.scheduledBufferCount {
+                    if self.isStreamComplete {
+                        log.info("All buffers played, finishing (gen #\(expectedGenID))")
+                        self.finishPlayback()
+                    } else {
+                        // Buffer underrun — generation can't keep up. Pause until more audio arrives.
+                        log.info("Buffer underrun at chunk \(self.completedBufferCount), pausing (gen #\(expectedGenID))")
+                        self.playerNode?.pause()
+                        self.state = .generating
+                    }
                 }
+            }
+        }
+
+        // If we were paused due to buffer underrun, resume now that we have a new chunk
+        if state == .generating, let player = playerNode, completedBufferCount > 0 {
+            let bufferedAhead = scheduledBufferCount - completedBufferCount
+            if bufferedAhead >= 2 { // Resume after 2 chunks of headroom
+                player.play()
+                state = .playing
+                log.info("Resumed after buffer underrun (gen #\(expectedGenID))")
             }
         }
 

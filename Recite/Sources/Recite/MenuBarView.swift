@@ -415,7 +415,7 @@ struct SettingsView: View {
                 HStack {
                     Image(systemName: "brain")
                         .font(.system(size: 12))
-                    Text("Qwen3-TTS 0.6B (4-bit)")
+                    Text("Qwen3-TTS 0.6B (8-bit)")
                         .font(.system(size: 12))
                 }
             }
