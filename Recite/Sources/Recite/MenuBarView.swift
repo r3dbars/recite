@@ -62,7 +62,7 @@ struct MenuBarView: View {
                     .padding(.bottom, 6)
             }
         case .loading:
-            statusRow(icon: "circle.dotted", text: "Loading Qwen3-TTS…", color: .blue)
+            statusRow(icon: "circle.dotted", text: "Loading Kokoro TTS…", color: .blue)
         case .ready:
             EmptyView()
         case .error(let msg):
@@ -141,7 +141,7 @@ struct MenuBarView: View {
                         .font(.system(size: 12))
                         .foregroundColor(.secondary)
                     if engine.modelStatus == .ready {
-                        Text("Qwen3-TTS ready")
+                        Text("Kokoro TTS ready")
                             .font(.system(size: 10))
                             .foregroundColor(.green)
                     }
@@ -340,8 +340,6 @@ struct QueueItemRow: View {
 
 struct SettingsView: View {
     @ObservedObject private var engine = SpeechEngine.shared
-    @State private var customVoice: String = ""
-    @State private var showCustomField = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -354,55 +352,32 @@ struct SettingsView: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(.secondary)
 
-                ForEach(SpeechEngine.voicePresets) { preset in
-                    Button {
-                        engine.voiceInstruct = preset.instruct
-                        showCustomField = false
-                    } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: engine.voiceInstruct == preset.instruct && !showCustomField
-                                  ? "checkmark.circle.fill" : "circle")
-                                .font(.system(size: 12))
-                                .foregroundColor(engine.voiceInstruct == preset.instruct && !showCustomField
-                                                 ? .accentColor : .secondary)
-                            Text(preset.name)
-                                .font(.system(size: 12))
-                                .foregroundColor(.primary)
-                            Spacer()
+                ScrollView {
+                    VStack(spacing: 2) {
+                        ForEach(SpeechEngine.voicePresets) { preset in
+                            Button {
+                                engine.selectedVoice = preset.kokoroVoice
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: engine.selectedVoice == preset.kokoroVoice
+                                          ? "checkmark.circle.fill" : "circle")
+                                        .font(.system(size: 12))
+                                        .foregroundColor(engine.selectedVoice == preset.kokoroVoice
+                                                         ? .accentColor : .secondary)
+                                    Text(preset.name)
+                                        .font(.system(size: 12))
+                                        .foregroundColor(.primary)
+                                    Text(preset.kokoroVoice)
+                                        .font(.system(size: 10))
+                                        .foregroundColor(.secondary)
+                                    Spacer()
+                                }
+                            }
+                            .buttonStyle(.plain)
                         }
                     }
-                    .buttonStyle(.plain)
                 }
-
-                Button {
-                    showCustomField.toggle()
-                    if showCustomField {
-                        customVoice = engine.voiceInstruct
-                    }
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: showCustomField ? "checkmark.circle.fill" : "circle")
-                            .font(.system(size: 12))
-                            .foregroundColor(showCustomField ? .accentColor : .secondary)
-                        Text("Custom…")
-                            .font(.system(size: 12))
-                            .foregroundColor(.primary)
-                        Spacer()
-                    }
-                }
-                .buttonStyle(.plain)
-
-                if showCustomField {
-                    TextField("Describe the voice you want…", text: $customVoice)
-                        .textFieldStyle(.roundedBorder)
-                        .font(.system(size: 11))
-                        .onSubmit {
-                            engine.voiceInstruct = customVoice
-                        }
-                    Text("e.g. \"A warm British female voice with a storytelling tone\"")
-                        .font(.system(size: 9))
-                        .foregroundColor(.secondary)
-                }
+                .frame(maxHeight: 200)
             }
 
             Divider()
@@ -415,7 +390,7 @@ struct SettingsView: View {
                 HStack {
                     Image(systemName: "brain")
                         .font(.system(size: 12))
-                    Text("Qwen3-TTS 0.6B (8-bit)")
+                    Text("Kokoro 82M (bf16)")
                         .font(.system(size: 12))
                 }
             }
@@ -438,7 +413,7 @@ struct SettingsView: View {
                 }
             }
 
-            Text("Global hotkey: ⌘⇧R\n100% on-device · Apple Silicon")
+            Text("Global hotkey: ⌘⇧R\n100% on-device · Apple Silicon · Kokoro 82M")
                 .font(.system(size: 10))
                 .foregroundColor(.secondary)
         }

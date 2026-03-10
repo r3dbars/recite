@@ -1,0 +1,4 @@
+[submodule "local-deps/mlx-audio-swift"]
+	path = local-deps/mlx-audio-swift
+	url = https://github.com/ekryski/mlx-audio-swift.git
+	branch = ek/kokoro

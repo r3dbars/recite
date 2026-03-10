@@ -11,16 +11,39 @@ private let log = Logger(subsystem: "com.r3dbars.recite", category: "SpeechEngin
 struct VoicePreset: Identifiable, Hashable {
     let id = UUID()
     let name: String
-    let instruct: String
+    let kokoroVoice: String
 
     static let defaultPreset = VoicePreset(
-        name: "Calm Female",
-        instruct: "A calm, clear female voice with a neutral American accent, speaking at a moderate pace."
+        name: "Heart",
+        kokoroVoice: "af_heart"
     )
 }
 
-/// Text-to-speech engine powered by Qwen3-TTS via mlx-audio-swift.
-/// Uses streaming generation so audio starts playing within seconds.
+/// espeak-ng based text processor for converting plain text to IPA phonemes.
+struct EspeakTextProcessor: TextProcessor {
+    func process(text: String, language: String?) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/espeak-ng")
+        process.arguments = ["--ipa", "-q", text]
+
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+
+        try process.run()
+        process.waitUntilExit()
+
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let ipa = String(data: data, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        // espeak-ng outputs multiple lines for multi-sentence input — join them
+        return ipa.replacingOccurrences(of: "\n", with: " ")
+    }
+}
+
+/// Text-to-speech engine powered by Kokoro 82M via mlx-audio-swift.
+/// Non-autoregressive: generates entire audio in one forward pass.
 @MainActor
 class SpeechEngine: NSObject, ObservableObject {
     static let shared = SpeechEngine()
@@ -40,37 +63,40 @@ class SpeechEngine: NSObject, ObservableObject {
     @Published var currentText: String = ""
     @Published var progress: Double = 0
     @Published var speed: Double = 1.0  // 0.5x – 2.0x playback speed
-    @Published var voiceInstruct: String = VoicePreset.defaultPreset.instruct {
-        didSet { log.info("Voice changed to: \(self.voiceInstruct)") }
+    @Published var selectedVoice: String = VoicePreset.defaultPreset.kokoroVoice {
+        didSet { log.info("Voice changed to: \(self.selectedVoice)") }
     }
 
     static let voicePresets: [VoicePreset] = [
-        VoicePreset(name: "Calm Female", instruct: "A calm, clear female voice with a neutral American accent, speaking at a moderate pace."),
-        VoicePreset(name: "Warm Male", instruct: "A warm, deep male voice with a friendly tone, speaking at a relaxed pace."),
-        VoicePreset(name: "Energetic Female", instruct: "An energetic young female voice with an upbeat and lively tone."),
-        VoicePreset(name: "Professional Male", instruct: "A professional male voice with a clear, authoritative tone suitable for narration."),
-        VoicePreset(name: "Gentle Female", instruct: "A gentle, soft-spoken female voice with a soothing and reassuring tone."),
-        VoicePreset(name: "British Male", instruct: "A refined British male voice with clear enunciation and a composed delivery."),
+        VoicePreset(name: "Heart", kokoroVoice: "af_heart"),
+        VoicePreset(name: "Bella", kokoroVoice: "af_bella"),
+        VoicePreset(name: "Sky", kokoroVoice: "af_sky"),
+        VoicePreset(name: "Nicole", kokoroVoice: "af_nicole"),
+        VoicePreset(name: "Sarah", kokoroVoice: "af_sarah"),
+        VoicePreset(name: "Nova", kokoroVoice: "af_nova"),
+        VoicePreset(name: "River", kokoroVoice: "af_river"),
+        VoicePreset(name: "Adam", kokoroVoice: "am_adam"),
+        VoicePreset(name: "Michael", kokoroVoice: "am_michael"),
+        VoicePreset(name: "Eric", kokoroVoice: "am_eric"),
+        VoicePreset(name: "Liam", kokoroVoice: "am_liam"),
+        VoicePreset(name: "Alice (British)", kokoroVoice: "bf_alice"),
+        VoicePreset(name: "Daniel (British)", kokoroVoice: "bm_daniel"),
     ]
 
-    private var model: Qwen3TTSModel?
+    private var model: (any SpeechGenerationModel)?
     private var generationTask: Task<Void, Never>?
 
     // Generation ID: incremented on each speak() call so stale callbacks are ignored
     private var generationID: UInt64 = 0
 
-    // Streaming audio playback via AVAudioEngine
+    // Audio playback via AVAudioEngine
     private var audioEngine: AVAudioEngine?
     private var playerNode: AVAudioPlayerNode?
     private var audioFormat: AVAudioFormat?
-    private var scheduledBufferCount = 0
-    private var completedBufferCount = 0
     private var totalSamplesScheduled = 0
-    private var isStreamComplete = false
 
-    private static let modelID = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"
+    private static let modelID = "mlx-community/Kokoro-82M-bf16"
     private static let sampleRate: Double = 24000
-    private static let samplesPerChunk: Int = 23040  // ~0.96s at 24kHz (from streamingInterval=1.0)
 
     override init() {
         super.init()
@@ -87,10 +113,14 @@ class SpeechEngine: NSObject, ObservableObject {
         modelStatus = .loading
 
         do {
-            let loaded = try await Qwen3TTSModel.fromPretrained(Self.modelID)
+            let textProcessor = EspeakTextProcessor()
+            let loaded = try await KokoroModel.fromPretrained(
+                Self.modelID,
+                textProcessor: textProcessor
+            )
             self.model = loaded
             modelStatus = .ready
-            log.info("Model loaded successfully")
+            log.info("Kokoro model loaded successfully")
         } catch {
             log.error("Model load failed: \(error.localizedDescription)")
             modelStatus = .error(error.localizedDescription)
@@ -102,7 +132,7 @@ class SpeechEngine: NSObject, ObservableObject {
         return false
     }
 
-    // MARK: - Streaming Playback
+    // MARK: - Playback
 
     func speak(_ text: String) {
         guard modelStatus == .ready, let model = model else {
@@ -119,91 +149,59 @@ class SpeechEngine: NSObject, ObservableObject {
         currentText = text
         progress = 0
         state = .generating
-        isStreamComplete = false
-        scheduledBufferCount = 0
-        completedBufferCount = 0
-        totalSamplesScheduled = 0
 
         // Increment generation ID so stale callbacks from previous speak() are ignored
         generationID &+= 1
         let myGenID = generationID
         log.info("Starting generation #\(myGenID)")
 
-        // Set up audio engine for streaming playback
-        setupAudioEngine()
-
         generationTask = Task {
             do {
-                let params = GenerateParameters(
-                    maxTokens: 4096,
-                    temperature: 0.7,
-                    topP: 0.95,
-                    repetitionPenalty: 1.5,
-                    repetitionContextSize: 30
-                )
+                // Split long text into sentences for incremental generation
+                let sentences = splitIntoSentences(text)
+                log.info("Split into \(sentences.count) sentences")
 
-                let voice = self.voiceInstruct.isEmpty ? nil : self.voiceInstruct
-                log.info("Starting streaming generation with voice=\(voice ?? "nil", privacy: .public)")
+                var allSamples: [Float] = []
+                let startTime = CFAbsoluteTimeGetCurrent()
 
-                let stream = model.generateStream(
-                    text: text,
-                    voice: voice,
-                    refAudio: nil,
-                    refText: nil,
-                    language: nil,
-                    generationParameters: params,
-                    streamingInterval: 1.0
-                )
+                for (i, sentence) in sentences.enumerated() {
+                    if Task.isCancelled { return }
 
-                // Start playback after 5 chunks (~5s buffer). If generation
-                // can't keep up, we'll pause mid-playback with "Buffering..." rather
-                // than making the user wait 15-20s upfront.
-                let chunksBeforePlay = 5
-                log.info("Buffer: start after \(chunksBeforePlay) chunks (~\(chunksBeforePlay * Int(Self.samplesPerChunk) / Int(Self.sampleRate))s)")
+                    let trimmed = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty else { continue }
 
-                var chunkIndex = 0
-                for try await event in stream {
-                    if Task.isCancelled {
-                        log.info("Stream cancelled")
-                        return
-                    }
+                    log.info("Generating sentence \(i+1)/\(sentences.count): \(String(trimmed.prefix(50)))...")
 
-                    switch event {
-                    case .audio(let audioChunk):
-                        chunkIndex += 1
-                        let samples = audioChunk.asArray(Float.self)
-                        log.info("Audio chunk #\(chunkIndex): \(samples.count) samples (gen #\(myGenID))")
+                    let params = GenerateParameters()
+                    let audio = try await model.generate(
+                        text: trimmed,
+                        voice: self.selectedVoice,
+                        refAudio: nil,
+                        refText: nil,
+                        language: "en-us",
+                        generationParameters: params
+                    )
 
-                        await MainActor.run {
-                            guard self.generationID == myGenID else { return }
-                            scheduleAudioChunk(samples)
+                    let samples = audio.asArray(Float.self)
+                    log.info("Sentence \(i+1): \(samples.count) samples (\(Double(samples.count) / Self.sampleRate)s)")
+                    allSamples.append(contentsOf: samples)
 
-                            // Start playing after buffering enough chunks for smooth playback
-                            if chunkIndex == chunksBeforePlay {
-                                startPlayback()
-                            }
-                        }
-
-                    case .info(let info):
-                        log.info("Generation info: tokensPerSecond=\(info.tokensPerSecond ?? 0)")
-
-                    case .token:
-                        break
+                    await MainActor.run {
+                        guard self.generationID == myGenID else { return }
+                        self.progress = Double(i + 1) / Double(sentences.count) * 0.5
                     }
                 }
 
+                if Task.isCancelled { return }
+
+                let elapsed = CFAbsoluteTimeGetCurrent() - startTime
+                let audioDuration = Double(allSamples.count) / Self.sampleRate
+                let rtf = audioDuration / elapsed
+                log.info("Generation complete: \(allSamples.count) samples, \(String(format: "%.1f", audioDuration))s audio in \(String(format: "%.1f", elapsed))s (\(String(format: "%.1f", rtf))x real-time)")
+
                 await MainActor.run {
-                    // Only mark complete if this is still the active generation
-                    guard self.generationID == myGenID else {
-                        log.info("Stream complete for stale generation #\(myGenID), ignoring")
-                        return
-                    }
-                    isStreamComplete = true
-                    log.info("Stream complete, \(chunkIndex) chunks total (gen #\(myGenID))")
-                    // If we never hit the buffer threshold, start playback now
-                    if chunkIndex > 0 && chunkIndex < chunksBeforePlay {
-                        startPlayback()
-                    }
+                    guard self.generationID == myGenID else { return }
+                    self.playAudio(allSamples)
                 }
 
             } catch {
@@ -219,6 +217,77 @@ class SpeechEngine: NSObject, ObservableObject {
         }
     }
 
+    /// Split text into sentences for incremental generation.
+    /// Kokoro has a 510-token limit, so we keep chunks manageable.
+    private func splitIntoSentences(_ text: String) -> [String] {
+        // Split on sentence-ending punctuation followed by whitespace
+        var sentences: [String] = []
+        var current = ""
+
+        for char in text {
+            current.append(char)
+            if ".!?".contains(char) {
+                let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty {
+                    sentences.append(trimmed)
+                }
+                current = ""
+            }
+        }
+
+        // Don't lose trailing text without punctuation
+        let remaining = current.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !remaining.isEmpty {
+            sentences.append(remaining)
+        }
+
+        return sentences.isEmpty ? [text] : sentences
+    }
+
+    private func playAudio(_ samples: [Float]) {
+        setupAudioEngine()
+        guard let player = playerNode, let format = audioFormat else { return }
+
+        let frameCount = AVAudioFrameCount(samples.count)
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else { return }
+        buffer.frameLength = frameCount
+
+        let channelData = buffer.floatChannelData![0]
+        for i in 0..<samples.count {
+            channelData[i] = max(-1.0, min(1.0, samples[i]))
+        }
+
+        totalSamplesScheduled = samples.count
+        let expectedGenID = self.generationID
+
+        player.scheduleBuffer(buffer) { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                guard self.generationID == expectedGenID else { return }
+                self.finishPlayback()
+            }
+        }
+
+        player.play()
+        state = .playing
+        log.info("Playback started (\(samples.count) samples, \(String(format: "%.1f", Double(samples.count) / Self.sampleRate))s)")
+
+        // Track progress
+        Task {
+            while state == .playing || state == .paused {
+                if let player = playerNode, let nodeTime = player.lastRenderTime,
+                   let playerTime = player.playerTime(forNodeTime: nodeTime),
+                   totalSamplesScheduled > 0 {
+                    let currentSample = Double(playerTime.sampleTime)
+                    let total = Double(totalSamplesScheduled)
+                    // Map playback progress to 0.5–1.0 (first 0.5 was generation)
+                    progress = 0.5 + min(currentSample / total, 1.0) * 0.5
+                }
+                try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
+            }
+        }
+    }
+
     private func setupAudioEngine() {
         let engine = AVAudioEngine()
         let player = AVAudioPlayerNode()
@@ -226,10 +295,6 @@ class SpeechEngine: NSObject, ObservableObject {
 
         engine.attach(player)
         engine.connect(player, to: engine.mainMixerNode, format: format)
-
-        // Apply speed via rate adjustment
-        // AVAudioPlayerNode doesn't have a rate property, so we use AVAudioUnitTimePitch
-        // For now, keep at 1x during streaming — speed is applied at engine level
 
         do {
             try engine.start()
@@ -239,78 +304,6 @@ class SpeechEngine: NSObject, ObservableObject {
             log.info("Audio engine started")
         } catch {
             log.error("Failed to start audio engine: \(error.localizedDescription)")
-        }
-    }
-
-    private func scheduleAudioChunk(_ samples: [Float]) {
-        guard let player = playerNode, let format = audioFormat else { return }
-
-        let frameCount = AVAudioFrameCount(samples.count)
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else { return }
-        buffer.frameLength = frameCount
-
-        // Copy samples into the buffer
-        let channelData = buffer.floatChannelData![0]
-        for i in 0..<samples.count {
-            channelData[i] = max(-1.0, min(1.0, samples[i]))
-        }
-
-        scheduledBufferCount += 1
-        totalSamplesScheduled += samples.count
-        let bufferIndex = scheduledBufferCount
-
-        let expectedGenID = self.generationID
-        player.scheduleBuffer(buffer) { [weak self] in
-            Task { @MainActor in
-                guard let self else { return }
-                guard self.generationID == expectedGenID else { return }
-                self.completedBufferCount += 1
-                if self.completedBufferCount >= self.scheduledBufferCount {
-                    if self.isStreamComplete {
-                        log.info("All buffers played, finishing (gen #\(expectedGenID))")
-                        self.finishPlayback()
-                    } else {
-                        // Buffer underrun — generation can't keep up. Pause until more audio arrives.
-                        log.info("Buffer underrun at chunk \(self.completedBufferCount), pausing (gen #\(expectedGenID))")
-                        self.playerNode?.pause()
-                        self.state = .generating
-                    }
-                }
-            }
-        }
-
-        // If we were paused due to buffer underrun, resume now that we have a new chunk
-        if state == .generating, let player = playerNode, completedBufferCount > 0 {
-            let bufferedAhead = scheduledBufferCount - completedBufferCount
-            if bufferedAhead >= 2 { // Resume after 2 chunks of headroom
-                player.play()
-                state = .playing
-                log.info("Resumed after buffer underrun (gen #\(expectedGenID))")
-            }
-        }
-
-        let total = self.totalSamplesScheduled
-        log.info("Scheduled buffer #\(bufferIndex) (\(samples.count) samples, total=\(total))")
-    }
-
-    private func startPlayback() {
-        guard let player = playerNode else { return }
-        player.play()
-        state = .playing
-        log.info("Playback started (streaming)")
-
-        // Track progress
-        Task {
-            while state == .playing || state == .generating || state == .paused {
-                if let player = playerNode, let nodeTime = player.lastRenderTime,
-                   let playerTime = player.playerTime(forNodeTime: nodeTime),
-                   totalSamplesScheduled > 0 {
-                    let currentSample = Double(playerTime.sampleTime)
-                    let total = Double(totalSamplesScheduled)
-                    progress = min(currentSample / total, 1.0)
-                }
-                try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
-            }
         }
     }
 
