@@ -1,5 +1,4 @@
 import SwiftUI
-import TTSKit
 
 struct MenuBarView: View {
     @StateObject private var engine = SpeechEngine.shared
@@ -341,6 +340,8 @@ struct QueueItemRow: View {
 
 struct SettingsView: View {
     @ObservedObject private var engine = SpeechEngine.shared
+    @State private var customVoice: String = ""
+    @State private var showCustomField = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -353,29 +354,54 @@ struct SettingsView: View {
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(.secondary)
 
-                ForEach(SpeechEngine.availableSpeakers, id: \.self) { speaker in
+                ForEach(SpeechEngine.voicePresets) { preset in
                     Button {
-                        engine.selectedSpeaker = speaker
+                        engine.voiceInstruct = preset.instruct
+                        showCustomField = false
                     } label: {
                         HStack(spacing: 6) {
-                            Image(systemName: engine.selectedSpeaker == speaker
+                            Image(systemName: engine.voiceInstruct == preset.instruct && !showCustomField
                                   ? "checkmark.circle.fill" : "circle")
                                 .font(.system(size: 12))
-                                .foregroundColor(engine.selectedSpeaker == speaker
+                                .foregroundColor(engine.voiceInstruct == preset.instruct && !showCustomField
                                                  ? .accentColor : .secondary)
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(speaker.displayName)
-                                    .font(.system(size: 12))
-                                    .foregroundColor(.primary)
-                                Text(speaker.voiceDescription)
-                                    .font(.system(size: 10))
-                                    .foregroundColor(.secondary)
-                                    .lineLimit(1)
-                            }
+                            Text(preset.name)
+                                .font(.system(size: 12))
+                                .foregroundColor(.primary)
                             Spacer()
                         }
                     }
                     .buttonStyle(.plain)
+                }
+
+                Button {
+                    showCustomField.toggle()
+                    if showCustomField {
+                        customVoice = engine.voiceInstruct
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: showCustomField ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 12))
+                            .foregroundColor(showCustomField ? .accentColor : .secondary)
+                        Text("Custom…")
+                            .font(.system(size: 12))
+                            .foregroundColor(.primary)
+                        Spacer()
+                    }
+                }
+                .buttonStyle(.plain)
+
+                if showCustomField {
+                    TextField("Describe the voice you want…", text: $customVoice)
+                        .textFieldStyle(.roundedBorder)
+                        .font(.system(size: 11))
+                        .onSubmit {
+                            engine.voiceInstruct = customVoice
+                        }
+                    Text("e.g. \"A warm British female voice with a storytelling tone\"")
+                        .font(.system(size: 9))
+                        .foregroundColor(.secondary)
                 }
             }
 
@@ -389,7 +415,7 @@ struct SettingsView: View {
                 HStack {
                     Image(systemName: "brain")
                         .font(.system(size: 12))
-                    Text("Qwen3-TTS 0.6B (CoreML)")
+                    Text("Qwen3-TTS 0.6B (8-bit)")
                         .font(.system(size: 12))
                 }
             }
@@ -412,7 +438,7 @@ struct SettingsView: View {
                 }
             }
 
-            Text("Global hotkey: ⌘⇧R\n100% on-device · Apple Silicon · Neural Engine")
+            Text("Global hotkey: ⌘⇧R\n100% on-device · Apple Silicon")
                 .font(.system(size: 10))
                 .foregroundColor(.secondary)
         }

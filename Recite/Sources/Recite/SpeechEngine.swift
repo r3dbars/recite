@@ -1,11 +1,25 @@
 import AVFoundation
 import Combine
-import TTSKit
+import MLX
+import MLXLMCommon
+import MLXAudioTTS
+import MLXAudioCore
 import os.log
 
 private let log = Logger(subsystem: "com.r3dbars.recite", category: "SpeechEngine")
 
-/// Text-to-speech engine powered by Qwen3-TTS via TTSKit (CoreML/Neural Engine).
+struct VoicePreset: Identifiable, Hashable {
+    let id = UUID()
+    let name: String
+    let instruct: String
+
+    static let defaultPreset = VoicePreset(
+        name: "Calm Female",
+        instruct: "A calm, clear female voice with a neutral American accent, speaking at a moderate pace."
+    )
+}
+
+/// Text-to-speech engine powered by Qwen3-TTS via mlx-audio-swift.
 /// Uses streaming generation so audio starts playing within seconds.
 @MainActor
 class SpeechEngine: NSObject, ObservableObject {
@@ -26,18 +40,21 @@ class SpeechEngine: NSObject, ObservableObject {
     @Published var currentText: String = ""
     @Published var progress: Double = 0
     @Published var speed: Double = 1.0  // 0.5x – 2.0x playback speed
-    @Published var selectedSpeaker: Qwen3Speaker = .serena {
-        didSet { log.info("Speaker changed to: \(self.selectedSpeaker.displayName)") }
+    @Published var voiceInstruct: String = VoicePreset.defaultPreset.instruct {
+        didSet { log.info("Voice changed to: \(self.voiceInstruct)") }
     }
 
-    static let availableSpeakers: [Qwen3Speaker] = [
-        .serena, .vivian, .ryan, .aiden,
-        .sohee, .onoAnna, .eric, .dylan, .uncleFu
+    static let voicePresets: [VoicePreset] = [
+        VoicePreset(name: "Calm Female", instruct: "A calm, clear female voice with a neutral American accent, speaking at a moderate pace."),
+        VoicePreset(name: "Warm Male", instruct: "A warm, deep male voice with a friendly tone, speaking at a relaxed pace."),
+        VoicePreset(name: "Energetic Female", instruct: "An energetic young female voice with an upbeat and lively tone."),
+        VoicePreset(name: "Professional Male", instruct: "A professional male voice with a clear, authoritative tone suitable for narration."),
+        VoicePreset(name: "Gentle Female", instruct: "A gentle, soft-spoken female voice with a soothing and reassuring tone."),
+        VoicePreset(name: "British Male", instruct: "A refined British male voice with clear enunciation and a composed delivery."),
     ]
 
-    private var tts: TTSKit?
-    private var producerTask: Task<Void, Never>?
-    private var consumerTask: Task<Void, Never>?
+    private var model: Qwen3TTSModel?
+    private var generationTask: Task<Void, Never>?
 
     // Generation ID: incremented on each speak() call so stale callbacks are ignored
     private var generationID: UInt64 = 0
@@ -51,7 +68,9 @@ class SpeechEngine: NSObject, ObservableObject {
     private var totalSamplesScheduled = 0
     private var isStreamComplete = false
 
+    private static let modelID = "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit"
     private static let sampleRate: Double = 24000
+    private static let samplesPerChunk: Int = 23040  // ~0.96s at 24kHz (from streamingInterval=1.0)
 
     override init() {
         super.init()
@@ -68,13 +87,12 @@ class SpeechEngine: NSObject, ObservableObject {
         modelStatus = .loading
 
         do {
-            let config = TTSKitConfig(model: .qwen3TTS_0_6b)
-            let loaded = try await TTSKit(config)
-            self.tts = loaded
+            let loaded = try await Qwen3TTSModel.fromPretrained(Self.modelID)
+            self.model = loaded
             modelStatus = .ready
-            log.info("TTSKit model loaded successfully")
+            log.info("Model loaded successfully")
         } catch {
-            log.error("TTSKit load failed: \(error.localizedDescription)")
+            log.error("Model load failed: \(error.localizedDescription)")
             modelStatus = .error(error.localizedDescription)
         }
     }
@@ -87,7 +105,7 @@ class SpeechEngine: NSObject, ObservableObject {
     // MARK: - Streaming Playback
 
     func speak(_ text: String) {
-        guard modelStatus == .ready, let tts = tts else {
+        guard modelStatus == .ready, let model = model else {
             log.warning("speak() called but model not ready (modelStatus=\(String(describing: self.modelStatus)))")
             return
         }
@@ -95,8 +113,7 @@ class SpeechEngine: NSObject, ObservableObject {
         log.info("speak() called with \(text.count) chars")
 
         // Cancel any in-progress generation
-        producerTask?.cancel()
-        consumerTask?.cancel()
+        generationTask?.cancel()
         stopAudioEngine()
 
         currentText = text
@@ -115,67 +132,89 @@ class SpeechEngine: NSObject, ObservableObject {
         // Set up audio engine for streaming playback
         setupAudioEngine()
 
-        // Capture MainActor-isolated values for use in producer task
-        let speaker = self.selectedSpeaker
-
-        // AsyncStream bridges TTSKit's @Sendable callback to MainActor consumption
-        let (stream, continuation) = AsyncStream<[Float]>.makeStream()
-
-        // Producer: TTSKit generates audio via CoreML/ANE, yields chunks to stream
-        producerTask = Task {
-            defer { continuation.finish() }
+        generationTask = Task {
             do {
-                let _ = try await tts.generate(
+                let params = GenerateParameters(
+                    maxTokens: 4096,
+                    temperature: 0.7,
+                    topP: 0.95,
+                    repetitionPenalty: 1.5,
+                    repetitionContextSize: 30
+                )
+
+                let voice = self.voiceInstruct.isEmpty ? nil : self.voiceInstruct
+                log.info("Starting streaming generation with voice=\(voice ?? "nil", privacy: .public)")
+
+                let stream = model.generateStream(
                     text: text,
-                    speaker: speaker,
-                    language: .english
-                ) { progress in
-                    if Task.isCancelled { return false }
-                    if !progress.audio.isEmpty {
-                        continuation.yield(progress.audio)
+                    voice: voice,
+                    refAudio: nil,
+                    refText: nil,
+                    language: nil,
+                    generationParameters: params,
+                    streamingInterval: 1.0
+                )
+
+                // Start playback after 5 chunks (~5s buffer). If generation
+                // can't keep up, we'll pause mid-playback with "Buffering..." rather
+                // than making the user wait 15-20s upfront.
+                let chunksBeforePlay = 5
+                log.info("Buffer: start after \(chunksBeforePlay) chunks (~\(chunksBeforePlay * Int(Self.samplesPerChunk) / Int(Self.sampleRate))s)")
+
+                var chunkIndex = 0
+                for try await event in stream {
+                    if Task.isCancelled {
+                        log.info("Stream cancelled")
+                        return
                     }
-                    return true
+
+                    switch event {
+                    case .audio(let audioChunk):
+                        chunkIndex += 1
+                        let samples = audioChunk.asArray(Float.self)
+                        log.info("Audio chunk #\(chunkIndex): \(samples.count) samples (gen #\(myGenID))")
+
+                        await MainActor.run {
+                            guard self.generationID == myGenID else { return }
+                            scheduleAudioChunk(samples)
+
+                            // Start playing after buffering enough chunks for smooth playback
+                            if chunkIndex == chunksBeforePlay {
+                                startPlayback()
+                            }
+                        }
+
+                    case .info(let info):
+                        log.info("Generation info: tokensPerSecond=\(info.tokensPerSecond ?? 0)")
+
+                    case .token:
+                        break
+                    }
                 }
-                log.info("Generation complete (gen #\(myGenID))")
+
+                await MainActor.run {
+                    // Only mark complete if this is still the active generation
+                    guard self.generationID == myGenID else {
+                        log.info("Stream complete for stale generation #\(myGenID), ignoring")
+                        return
+                    }
+                    isStreamComplete = true
+                    log.info("Stream complete, \(chunkIndex) chunks total (gen #\(myGenID))")
+                    // If we never hit the buffer threshold, start playback now
+                    if chunkIndex > 0 && chunkIndex < chunksBeforePlay {
+                        startPlayback()
+                    }
+                }
+
             } catch {
+                log.error("Generation error: \(error.localizedDescription)")
                 if !Task.isCancelled {
-                    log.error("Generation error: \(error.localizedDescription)")
+                    await MainActor.run {
+                        guard self.generationID == myGenID else { return }
+                        state = .idle
+                        currentText = ""
+                    }
                 }
-            }
-        }
-
-        // Consumer: reads chunks from stream, schedules on AVAudioEngine
-        // TTSKit delivers ~80ms chunks (1920 samples at 24kHz)
-        // Start playback after 5 chunks (~400ms buffer)
-        let chunksBeforePlay = 5
-        log.info("Buffer: start after \(chunksBeforePlay) chunks (~\(chunksBeforePlay * 80)ms)")
-
-        consumerTask = Task {
-            var chunkIndex = 0
-
-            for await samples in stream {
-                guard self.generationID == myGenID else { break }
-                if Task.isCancelled { break }
-
-                chunkIndex += 1
-                log.info("Audio chunk #\(chunkIndex): \(samples.count) samples (gen #\(myGenID))")
-                self.scheduleAudioChunk(samples)
-
-                // Start playing after buffering enough chunks for smooth playback
-                if chunkIndex == chunksBeforePlay {
-                    self.startPlayback()
-                }
-            }
-
-            guard self.generationID == myGenID else {
-                log.info("Stream complete for stale generation #\(myGenID), ignoring")
-                return
-            }
-            self.isStreamComplete = true
-            log.info("Stream complete, \(chunkIndex) chunks total (gen #\(myGenID))")
-            // If we never hit the buffer threshold, start playback now
-            if chunkIndex > 0 && chunkIndex < chunksBeforePlay {
-                self.startPlayback()
             }
         }
     }
@@ -187,6 +226,10 @@ class SpeechEngine: NSObject, ObservableObject {
 
         engine.attach(player)
         engine.connect(player, to: engine.mainMixerNode, format: format)
+
+        // Apply speed via rate adjustment
+        // AVAudioPlayerNode doesn't have a rate property, so we use AVAudioUnitTimePitch
+        // For now, keep at 1x during streaming — speed is applied at engine level
 
         do {
             try engine.start()
@@ -300,8 +343,7 @@ class SpeechEngine: NSObject, ObservableObject {
     }
 
     func stop() {
-        producerTask?.cancel()
-        consumerTask?.cancel()
+        generationTask?.cancel()
         stopAudioEngine()
         state = .idle
         currentText = ""
