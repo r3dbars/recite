@@ -92,6 +92,7 @@ class SpeechEngine: NSObject, ObservableObject {
     // Audio playback via AVAudioEngine
     private var audioEngine: AVAudioEngine?
     private var playerNode: AVAudioPlayerNode?
+    private var timePitchNode: AVAudioUnitTimePitch?
     private var audioFormat: AVAudioFormat?
     private var totalSamplesScheduled = 0
 
@@ -104,13 +105,40 @@ class SpeechEngine: NSObject, ObservableObject {
 
     // MARK: - Model Loading
 
+    /// Returns true if the Kokoro model is already present in the local HuggingFace cache.
+    private func isModelCached() -> Bool {
+        // Mirrors ModelUtils.resolveOrDownloadModel path logic:
+        // <HubCache.default.cacheDirectory>/mlx-audio/mlx-community_Kokoro-82M-bf16/
+        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
+            .deletingLastPathComponent()
+            .appendingPathComponent(".cache/huggingface/hub")
+            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".cache/huggingface/hub")
+        let modelDir = cacheDir
+            .appendingPathComponent("mlx-audio")
+            .appendingPathComponent(Self.modelID.replacingOccurrences(of: "/", with: "_"))
+        guard let files = try? FileManager.default.contentsOfDirectory(
+            at: modelDir, includingPropertiesForKeys: [.fileSizeKey]
+        ) else { return false }
+        return files.contains {
+            guard $0.pathExtension == "safetensors" else { return false }
+            let size = (try? $0.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+            return size > 0
+        }
+    }
+
     func loadModel() async {
         guard modelStatus == .notLoaded || isErrorStatus else {
             log.info("loadModel() skipped — modelStatus=\(String(describing: self.modelStatus))")
             return
         }
         log.info("loadModel() starting...")
-        modelStatus = .loading
+        if isModelCached() {
+            modelStatus = .loading
+            log.info("Model found in cache — loading weights")
+        } else {
+            modelStatus = .downloading(progress: 0.0)
+            log.info("Model not in cache — downloading from HuggingFace")
+        }
 
         do {
             let textProcessor = EspeakTextProcessor()
@@ -291,17 +319,22 @@ class SpeechEngine: NSObject, ObservableObject {
     private func setupAudioEngine() {
         let engine = AVAudioEngine()
         let player = AVAudioPlayerNode()
+        let timePitch = AVAudioUnitTimePitch()
+        timePitch.rate = Float(speed)
         let format = AVAudioFormat(standardFormatWithSampleRate: Self.sampleRate, channels: 1)!
 
         engine.attach(player)
-        engine.connect(player, to: engine.mainMixerNode, format: format)
+        engine.attach(timePitch)
+        engine.connect(player, to: timePitch, format: format)
+        engine.connect(timePitch, to: engine.mainMixerNode, format: format)
 
         do {
             try engine.start()
             self.audioEngine = engine
             self.playerNode = player
+            self.timePitchNode = timePitch
             self.audioFormat = format
-            log.info("Audio engine started")
+            log.info("Audio engine started (speed: \(self.speed)x)")
         } catch {
             log.error("Failed to start audio engine: \(error.localizedDescription)")
         }
@@ -320,6 +353,7 @@ class SpeechEngine: NSObject, ObservableObject {
         audioEngine?.stop()
         audioEngine = nil
         playerNode = nil
+        timePitchNode = nil
         audioFormat = nil
     }
 
@@ -359,5 +393,7 @@ class SpeechEngine: NSObject, ObservableObject {
 
     func updateSpeed(_ newSpeed: Double) {
         speed = newSpeed
+        timePitchNode?.rate = Float(newSpeed)
+        log.info("Speed updated to \(newSpeed)x")
     }
 }
