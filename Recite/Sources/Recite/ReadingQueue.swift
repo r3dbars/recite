@@ -19,7 +19,7 @@ class ReadingQueue: ObservableObject {
             text.split(separator: " ").count
         }
         var estimatedMinutes: Int {
-            max(1, wordCount / 180) // ~180 wpm reading speed
+            max(1, (wordCount + 179) / 180) // ~180 wpm reading speed
         }
     }
 

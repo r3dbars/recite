@@ -5,6 +5,25 @@ import os.log
 
 private let log = Logger(subsystem: "com.r3dbars.recite", category: "TextGrabber")
 
+private struct ClipboardItemSnapshot {
+    let contents: [(NSPasteboard.PasteboardType, Data)]
+
+    init(item: NSPasteboardItem) {
+        contents = item.types.compactMap { type in
+            guard let data = item.data(forType: type) else { return nil }
+            return (type, data)
+        }
+    }
+
+    func makePasteboardItem() -> NSPasteboardItem {
+        let item = NSPasteboardItem()
+        for (type, data) in contents {
+            item.setData(data, forType: type)
+        }
+        return item
+    }
+}
+
 /// Grabs selected text from the frontmost application.
 /// Strategy:
 ///   1. Try Accessibility API (AXSelectedText) — fast, no clipboard side-effects
@@ -14,14 +33,6 @@ class TextGrabber: ObservableObject {
     static let shared = TextGrabber()
 
     // MARK: - Public
-
-    /// Call this synchronously from the hotkey handler to capture the source app
-    /// before any async work or focus changes.
-    func captureSourceApp() -> pid_t? {
-        let app = NSWorkspace.shared.frontmostApplication
-        log.info("Captured source app: \(app?.localizedName ?? "none") (pid \(app?.processIdentifier ?? 0))")
-        return app?.processIdentifier
-    }
 
     func getSelectedText(fromPID pid: pid_t?) async -> String? {
         log.info("getSelectedText(fromPID: \(pid ?? 0)) called")
@@ -88,14 +99,18 @@ class TextGrabber: ObservableObject {
             log.warning("Failed to get focused element: AXError code \(focusResult.rawValue)")
             return nil
         }
+        guard CFGetTypeID(element) == AXUIElementGetTypeID() else {
+            log.warning("Focused accessibility element had an unexpected type")
+            return nil
+        }
+        let axElement = element as! AXUIElement
 
-        // Log the role of the focused element
         var role: AnyObject?
-        AXUIElementCopyAttributeValue(element as! AXUIElement, kAXRoleAttribute as CFString, &role)
+        AXUIElementCopyAttributeValue(axElement, kAXRoleAttribute as CFString, &role)
         log.info("Focused element role: \(role as? String ?? "unknown")")
 
         var selectedText: AnyObject?
-        let textResult = AXUIElementCopyAttributeValue(element as! AXUIElement,
+        let textResult = AXUIElementCopyAttributeValue(axElement,
                                                         kAXSelectedTextAttribute as CFString,
                                                         &selectedText)
         guard textResult == .success else {
@@ -104,7 +119,7 @@ class TextGrabber: ObservableObject {
         }
 
         let text = selectedText as? String
-        log.info("AX selected text: \(text ?? "nil") (\(text?.count ?? 0) chars)")
+        log.info("AX selected text length: \(text?.count ?? 0) chars")
         return text
     }
 
@@ -114,11 +129,8 @@ class TextGrabber: ObservableObject {
         let pasteboard = NSPasteboard.general
         log.info("Starting clipboard simulation")
 
-        // Save current clipboard content for restoration later
-        let savedStrings = pasteboard.pasteboardItems?.compactMap {
-            $0.string(forType: .string)
-        }
-        log.info("Saved clipboard items=\(savedStrings?.count ?? 0)")
+        let savedItems = pasteboard.pasteboardItems?.map(ClipboardItemSnapshot.init) ?? []
+        log.info("Saved clipboard items=\(savedItems.count)")
 
         // Clear clipboard FIRST, then save the changeCount.
         // clearContents() itself increments changeCount, so we must save AFTER
@@ -158,8 +170,7 @@ class TextGrabber: ObservableObject {
 
         // Check all common text types — Chrome often copies as rich text without plain text
         let types = pasteboard.types ?? []
-        let typeNames = types.map(\.rawValue).joined(separator: ", ")
-        log.warning("Clipboard types: \(typeNames, privacy: .public)")
+        log.info("Clipboard changed with \(types.count) type(s)")
 
         // Try multiple pasteboard types in order of preference
         let textTypes: [NSPasteboard.PasteboardType] = [
@@ -182,8 +193,7 @@ class TextGrabber: ObservableObject {
         if grabbed == nil {
             if let items = pasteboard.pasteboardItems {
                 for item in items {
-                    let itemTypeNames = item.types.map(\.rawValue).joined(separator: ", ")
-                    log.warning("Pasteboard item types: \(itemTypeNames, privacy: .public)")
+                    log.info("Checking pasteboard item with \(item.types.count) type(s)")
                     for type in item.types {
                         if let text = item.string(forType: type), !text.isEmpty {
                             // Skip HTML markup, prefer plain text
@@ -208,15 +218,16 @@ class TextGrabber: ObservableObject {
             }
         }
 
-        let grabSummary = grabbed != nil ? "\(grabbed!.count) chars: \(String(grabbed!.prefix(80)))" : "nil"
-        log.warning("Grabbed from clipboard: \(grabSummary, privacy: .public) (changeCount=\(pasteboard.changeCount), polls=\(pollCount))")
+        if let grabbed {
+            log.info("Grabbed text from clipboard (\(grabbed.count) chars, polls=\(pollCount))")
+        } else {
+            log.info("No text grabbed from clipboard (polls=\(pollCount))")
+        }
 
         // Restore original clipboard
         pasteboard.clearContents()
-        if let strings = savedStrings, !strings.isEmpty {
-            for s in strings {
-                pasteboard.setString(s, forType: .string)
-            }
+        if !savedItems.isEmpty {
+            pasteboard.writeObjects(savedItems.map { $0.makePasteboardItem() })
         }
 
         return grabbed
