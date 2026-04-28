@@ -63,8 +63,17 @@ class SpeechEngine: NSObject, ObservableObject {
     @Published var currentText: String = ""
     @Published var progress: Double = 0
     @Published var speed: Double = 1.0  // 0.5x – 2.0x playback speed
-    @Published var selectedVoice: String = VoicePreset.defaultPreset.kokoroVoice {
-        didSet { log.info("Voice changed to: \(self.selectedVoice)") }
+    @Published var selectedVoice: String = UserDefaults.standard.string(forKey: "selectedVoice")
+        ?? VoicePreset.defaultPreset.kokoroVoice {
+        didSet {
+            log.info("Voice changed to: \(self.selectedVoice)")
+            UserDefaults.standard.set(selectedVoice, forKey: "selectedVoice")
+            guard state == .playing || state == .paused || state == .generating else { return }
+            let textToRepeat = currentText.isEmpty ? ReadingQueue.shared.currentItem?.text : currentText
+            if let text = textToRepeat {
+                speak(text)
+            }
+        }
     }
 
     static let voicePresets: [VoicePreset] = [
@@ -189,6 +198,16 @@ class SpeechEngine: NSObject, ObservableObject {
                 let sentences = splitIntoSentences(text)
                 log.info("Split into \(sentences.count) sentences")
 
+                guard !sentences.isEmpty else {
+                    await MainActor.run {
+                        guard self.generationID == myGenID else { return }
+                        self.state = .idle
+                        self.currentText = ""
+                        self.progress = 0
+                    }
+                    return
+                }
+
                 var allSamples: [Float] = []
                 let startTime = CFAbsoluteTimeGetCurrent()
 
@@ -222,6 +241,16 @@ class SpeechEngine: NSObject, ObservableObject {
 
                 if Task.isCancelled { return }
 
+                guard !allSamples.isEmpty else {
+                    await MainActor.run {
+                        guard self.generationID == myGenID else { return }
+                        self.state = .idle
+                        self.currentText = ""
+                        self.progress = 0
+                    }
+                    return
+                }
+
                 let elapsed = CFAbsoluteTimeGetCurrent() - startTime
                 let audioDuration = Double(allSamples.count) / Self.sampleRate
                 let rtf = audioDuration / elapsed
@@ -245,31 +274,126 @@ class SpeechEngine: NSObject, ObservableObject {
         }
     }
 
-    /// Split text into sentences for incremental generation.
-    /// Kokoro has a 510-token limit, so we keep chunks manageable.
-    private func splitIntoSentences(_ text: String) -> [String] {
-        // Split on sentence-ending punctuation followed by whitespace
-        var sentences: [String] = []
-        var current = ""
+    /// Clean raw text before TTS — strips Slack noise, timestamps, emoji codes, file attachments.
+    private func preprocessText(_ text: String) -> String {
+        var s = text
 
-        for char in text {
-            current.append(char)
-            if ".!?".contains(char) {
-                let trimmed = current.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty {
-                    sentences.append(trimmed)
-                }
-                current = ""
+        func re(_ pattern: String, _ replacement: String, multiline: Bool = false) {
+            var opts: NSRegularExpression.Options = []
+            if multiline { opts.insert(.anchorsMatchLines) }
+            guard let rx = try? NSRegularExpression(pattern: pattern, options: opts) else { return }
+            let full = NSRange(s.startIndex..., in: s)
+            s = rx.stringByReplacingMatches(in: s, range: full, withTemplate: replacement)
+        }
+
+        // Slack timestamps: [9:19 AM]
+        re(#"\[\d{1,2}:\d{2}\s*(AM|PM)\]"#, "")
+        // Slack emoji codes: :thankyoured:
+        re(#":\w[\w+\-]*:"#, "")
+        // File attachment lines: "Binary splunkd.log", "Zip JAMF…", "Image …", "Screenshot …"
+        re(#"^(Binary|Zip|Image|PDF|File|Screenshot)\s+\S+.*$"#, "", multiline: true)
+        // URLs
+        re(#"https?://\S+"#, "link")
+        re(#"\b\w+\.\w{2,4}/\S*"#, "link")
+        // Collapse multiple blank lines
+        re(#"\n{3,}"#, "\n\n")
+
+        return s.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Split cleaned text into TTS-safe chunks.
+    /// Rules: split on sentence boundaries, but avoid splitting on abbreviations,
+    /// timestamps, decimals, or mid-word periods. Chunks are capped at ~400 chars
+    /// to stay well within Kokoro's 510-token limit.
+    private func splitIntoSentences(_ text: String) -> [String] {
+        let cleaned = preprocessText(text)
+        let maxChunkChars = 400
+        guard !cleaned.isEmpty else { return [] }
+
+        // Use NSLinguisticTagger for sentence boundary detection — handles
+        // abbreviations, "Mr.", decimals, and URLs far better than naive punctuation split.
+        var chunks: [String] = []
+        let tagger = NSLinguisticTagger(tagSchemes: [.tokenType], options: 0)
+        tagger.string = cleaned
+
+        var sentences: [String] = []
+        let range = NSRange(cleaned.startIndex..., in: cleaned)
+        tagger.enumerateTags(in: range,
+                             unit: .sentence,
+                             scheme: .tokenType,
+                             options: []) { _, tokenRange, _ in
+            if let r = Range(tokenRange, in: cleaned) {
+                let s = String(cleaned[r]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !s.isEmpty { sentences.append(s) }
             }
         }
 
-        // Don't lose trailing text without punctuation
-        let remaining = current.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !remaining.isEmpty {
-            sentences.append(remaining)
+        // Fallback: if tagger produced nothing (very short text), use the whole thing
+        if sentences.isEmpty { return splitByWords(cleaned, maxChars: maxChunkChars) }
+
+        // Merge very short sentences into the previous chunk, split oversized ones
+        var current = ""
+        for sentence in sentences {
+            if sentence.count > maxChunkChars {
+                // Long sentence: flush current, then split by clause (,;—)
+                if !current.isEmpty { chunks.append(current); current = "" }
+                let clauses = sentence.components(separatedBy: CharacterSet(charactersIn: ",;—"))
+                var clauseBuffer = ""
+                for clause in clauses {
+                    let c = clause.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !c.isEmpty else { continue }
+                    if c.count > maxChunkChars {
+                        if !clauseBuffer.isEmpty { chunks.append(clauseBuffer); clauseBuffer = "" }
+                        chunks.append(contentsOf: splitByWords(c, maxChars: maxChunkChars))
+                        continue
+                    }
+                    if clauseBuffer.count + c.count > maxChunkChars {
+                        if !clauseBuffer.isEmpty { chunks.append(clauseBuffer) }
+                        clauseBuffer = c
+                    } else {
+                        clauseBuffer = clauseBuffer.isEmpty ? c : clauseBuffer + ", " + c
+                    }
+                }
+                if !clauseBuffer.isEmpty { chunks.append(clauseBuffer) }
+            } else if current.count + sentence.count > maxChunkChars {
+                if !current.isEmpty { chunks.append(current) }
+                current = sentence
+            } else {
+                current = current.isEmpty ? sentence : current + " " + sentence
+            }
+        }
+        if !current.isEmpty { chunks.append(current) }
+
+        return chunks.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
+    private func splitByWords(_ text: String, maxChars: Int) -> [String] {
+        var chunks: [String] = []
+        var current = ""
+
+        for word in text.split(separator: " ") {
+            let next = String(word)
+            if next.count > maxChars {
+                if !current.isEmpty {
+                    chunks.append(current)
+                    current = ""
+                }
+                var remainder = next
+                while !remainder.isEmpty {
+                    let end = remainder.index(remainder.startIndex, offsetBy: min(maxChars, remainder.count))
+                    chunks.append(String(remainder[..<end]))
+                    remainder = String(remainder[end...])
+                }
+            } else if current.count + next.count + 1 > maxChars {
+                if !current.isEmpty { chunks.append(current) }
+                current = next
+            } else {
+                current = current.isEmpty ? next : current + " " + next
+            }
         }
 
-        return sentences.isEmpty ? [text] : sentences
+        if !current.isEmpty { chunks.append(current) }
+        return chunks
     }
 
     private func playAudio(_ samples: [Float]) {
@@ -355,6 +479,7 @@ class SpeechEngine: NSObject, ObservableObject {
         playerNode = nil
         timePitchNode = nil
         audioFormat = nil
+        totalSamplesScheduled = 0
     }
 
     func pause() {
@@ -370,6 +495,7 @@ class SpeechEngine: NSObject, ObservableObject {
     }
 
     func stop() {
+        generationID &+= 1
         generationTask?.cancel()
         stopAudioEngine()
         state = .idle

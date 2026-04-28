@@ -25,6 +25,10 @@ class ReadingQueue: ObservableObject {
 
     @Published var items: [Item] = []
     @Published var currentIndex: Int? = nil
+    @Published var history: [Item] = []
+
+    private static let historyKey = "readingHistory"
+    private static let maxHistory = 50
 
     var currentItem: Item? {
         guard let idx = currentIndex, items.indices.contains(idx) else { return nil }
@@ -33,11 +37,17 @@ class ReadingQueue: ObservableObject {
 
     var isEmpty: Bool { items.isEmpty }
 
+    init() {
+        loadHistory()
+    }
+
     // MARK: - Queue Management
 
-    func add(text: String, source: String = "Unknown") {
+    @discardableResult
+    func add(text: String, source: String = "Unknown") -> Item {
         let item = Item(text: text, source: source, addedAt: Date())
         items.append(item)
+        return item
     }
 
     func remove(at offsets: IndexSet) {
@@ -60,7 +70,11 @@ class ReadingQueue: ObservableObject {
     }
 
     func move(fromOffsets: IndexSet, toOffset: Int) {
+        let currentID = currentItem?.id
         items.move(fromOffsets: fromOffsets, toOffset: toOffset)
+        if let currentID {
+            currentIndex = items.firstIndex { $0.id == currentID }
+        }
     }
 
     // MARK: - Playback Control
@@ -90,12 +104,48 @@ class ReadingQueue: ObservableObject {
 
     func didFinishCurrent() {
         guard let idx = currentIndex else { return }
+        // Save to history before advancing
+        addToHistory(items[idx])
         let next = idx + 1
         if next < items.count {
             currentIndex = next
             SpeechEngine.shared.speak(items[next].text)
         } else {
             currentIndex = nil
+        }
+    }
+
+    func clearHistory() {
+        history.removeAll()
+        UserDefaults.standard.removeObject(forKey: Self.historyKey)
+    }
+
+    // MARK: - History Persistence
+
+    private func addToHistory(_ item: Item) {
+        // Deduplicate by text
+        history.removeAll { $0.text == item.text }
+        history.insert(item, at: 0)
+        if history.count > Self.maxHistory {
+            history = Array(history.prefix(Self.maxHistory))
+        }
+        saveHistory()
+    }
+
+    private func saveHistory() {
+        let data = history.compactMap { item -> [String: String]? in
+            ["text": item.text, "source": item.source, "addedAt": ISO8601DateFormatter().string(from: item.addedAt)]
+        }
+        UserDefaults.standard.set(data, forKey: Self.historyKey)
+    }
+
+    private func loadHistory() {
+        guard let data = UserDefaults.standard.array(forKey: Self.historyKey) as? [[String: String]] else { return }
+        let fmt = ISO8601DateFormatter()
+        history = data.compactMap { dict in
+            guard let text = dict["text"], let source = dict["source"],
+                  let dateStr = dict["addedAt"], let date = fmt.date(from: dateStr) else { return nil }
+            return Item(text: text, source: source, addedAt: date)
         }
     }
 }

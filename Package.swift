@@ -23,7 +23,10 @@ let package = Package(
             path: "Recite/Sources/Recite",
             resources: [
                 .copy("../../Resources/Info.plist"),
-                .copy("../../Resources/Recite.entitlements")
+                .copy("../../Resources/Recite.entitlements"),
+                .copy("../../Resources/AppIcon.icns"),
+                .copy("../../Resources/MenuBarIcon.png"),
+                .copy("../../Resources/MenuBarIcon@2x.png")
             ]
         )
     ]
