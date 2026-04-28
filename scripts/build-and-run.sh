@@ -4,7 +4,7 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_DIR="$PROJECT_DIR/.build/debug/Recite.app"
 CONTENTS="$APP_DIR/Contents"
-IDENTITY="Apple Development: Justin Betker (LZRN6W4R74)"
+REQUESTED_IDENTITY="${RECITE_CODESIGN_IDENTITY:-}"
 ENTITLEMENTS="$PROJECT_DIR/Recite/Resources/Recite.entitlements"
 RESOURCES="$PROJECT_DIR/Recite/Resources"
 MLX_METAL_SOURCES="$PROJECT_DIR/.build/checkouts/mlx-swift/Source/Cmlx/mlx-generated/metal"
@@ -35,12 +35,16 @@ if [ -d "$MLX_METAL_SOURCES" ]; then
     xcrun -sdk macosx metal -I "$MLX_METAL_SOURCES" -c "$file" -o "$air"
     AIR_FILES+=("$air")
   done < <(find "$MLX_METAL_SOURCES" -name '*.metal' -print0)
-  xcrun -sdk macosx metallib "${AIR_FILES[@]}" -o "$CONTENTS/MacOS/mlx.metallib"
+  if [ "${#AIR_FILES[@]}" -gt 0 ]; then
+    xcrun -sdk macosx metallib "${AIR_FILES[@]}" -o "$CONTENTS/MacOS/mlx.metallib"
+  else
+    echo "==> No MLX Metal kernels found."
+  fi
   rm -rf "$TMP_METAL_DIR"
 fi
 
-if security find-identity -v -p codesigning | grep -q "$IDENTITY"; then
-  SIGN_IDENTITY="$IDENTITY"
+if [ -n "$REQUESTED_IDENTITY" ] && security find-identity -v -p codesigning | grep -Fq "$REQUESTED_IDENTITY"; then
+  SIGN_IDENTITY="$REQUESTED_IDENTITY"
 else
   SIGN_IDENTITY="-"
 fi

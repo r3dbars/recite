@@ -1,29 +1,7 @@
 import SwiftUI
 import AppKit
 
-// MARK: - Always-visible button style (unaffected by window key state)
-
-struct AlwaysVisibleButtonStyle: ButtonStyle {
-    let prominent: Bool
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 14, weight: .medium))
-            .padding(.vertical, 9)
-            .padding(.horizontal, 16)
-            .frame(maxWidth: .infinity)
-            .background(prominent ? Color.accentColor : Color(NSColor.controlColor))
-            .foregroundColor(prominent ? .white : .primary)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color(NSColor.separatorColor), lineWidth: prominent ? 0 : 0.5)
-            )
-            .opacity(configuration.isPressed ? 0.8 : 1.0)
-    }
-}
-
-// MARK: - Menu Bar Popover (compact dark panel, Transcripted-style)
+// MARK: - Menu Bar Popover
 
 struct MenuBarPopoverView: View {
     @StateObject private var engine = SpeechEngine.shared
@@ -285,7 +263,6 @@ enum RecitePanel: String, Hashable, CaseIterable {
 
 struct ReciteSidebar: View {
     @Binding var selection: RecitePanel
-    @StateObject private var engine = SpeechEngine.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -508,7 +485,7 @@ struct PlayerDetailView: View {
                         icon: "terminal",
                         label: "espeak-ng",
                         detail: "Text preprocessing — brew install espeak-ng",
-                        status: FileManager.default.fileExists(atPath: "/opt/homebrew/bin/espeak-ng")
+                        status: EspeakTextProcessor.installedExecutablePath != nil
                             ? .ready("Ready") : .warning("Not installed")
                     )
                 }
@@ -558,7 +535,7 @@ struct PlayerDetailView: View {
     }
 }
 
-// MARK: - Action Card (Transcripted-style row with icon + chevron)
+// MARK: - Action Card
 
 struct ActionCard: View {
     let icon: String
@@ -619,7 +596,7 @@ struct ActionCard: View {
     }
 }
 
-// MARK: - Ready Check Row (Transcripted-style)
+// MARK: - Ready Check Row
 
 struct ReadyCheckRow: View {
     enum Status {
@@ -973,7 +950,7 @@ struct AboutDetailView: View {
                             AboutRequirement(met: true, text: "Apple Silicon Mac (M1 or later)")
                             AboutRequirement(met: true, text: "macOS 14 Sonoma or later")
                             AboutRequirement(
-                                met: FileManager.default.fileExists(atPath: "/opt/homebrew/bin/espeak-ng"),
+                                met: EspeakTextProcessor.installedExecutablePath != nil,
                                 text: "espeak-ng  —  brew install espeak-ng"
                             )
                         }
@@ -1081,7 +1058,6 @@ private struct AboutRequirement: View {
 
 struct QueueDetailView: View {
     @StateObject private var queue  = ReadingQueue.shared
-    @StateObject private var engine = SpeechEngine.shared
 
     var body: some View {
         VStack(spacing: 0) {
