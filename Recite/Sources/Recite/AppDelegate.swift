@@ -10,7 +10,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
     private var eventMonitor: Any?
+    private var localEventMonitor: Any?
     private var workspaceObserver: Any?
+    private var mainWindow: NSWindow?
     private var cancellables = Set<AnyCancellable>()
 
     private let engine = SpeechEngine.shared
@@ -28,7 +30,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         subscribeToEngine()
         trackFrontmostApp()
 
-        // Load Qwen3-TTS model in background
+        // Load Kokoro TTS model in background
         Task {
             await engine.loadModel()
         }
@@ -39,6 +41,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             engine.stop()
         }
         if let monitor = eventMonitor {
+            NSEvent.removeMonitor(monitor)
+        }
+        if let monitor = localEventMonitor {
             NSEvent.removeMonitor(monitor)
         }
         if let obs = workspaceObserver {
@@ -133,8 +138,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 return
             }
         }
-        // No window found — open a new one via the SwiftUI environment
-        NSApp.sendAction(Selector(("_openMainWindow:")), to: nil, from: nil)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 820, height: 560),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "Recite"
+        window.center()
+        window.setFrameAutosaveName("ReciteMainWindow")
+        window.contentViewController = NSHostingController(rootView: ReciteWindowView())
+        mainWindow = window
+        window.makeKeyAndOrderFront(nil)
     }
 
     @objc private func handleStatusItemClick(_ sender: NSStatusBarButton) {
@@ -167,7 +183,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Model status
         let statusTitle: String
         switch engine.modelStatus {
-        case .ready: statusTitle = "Qwen3-TTS Ready"
+        case .ready: statusTitle = "Kokoro TTS Ready"
         case .loading: statusTitle = "Loading Model…"
         case .downloading: statusTitle = "Downloading Model…"
         case .notLoaded: statusTitle = "Model Not Loaded"
@@ -200,25 +216,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupGlobalHotKey() {
         guard eventMonitor == nil else { return }
 
-        let handler: (NSEvent) -> Void = { [weak self] event in
+        let handler: (NSEvent) -> Bool = { [weak self] event in
             // Mask to device-independent flags only — macOS injects extra bits
             // (.numericPad, .function, etc.) that break a naive .contains() check.
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            guard event.keyCode == 15, flags == [.control, .option] else { return }
+            guard event.keyCode == 15, flags == [.control, .option] else { return false }
             log.info("⌃⌥R pressed — hotkey triggered (keyCode=\(event.keyCode))")
-            let sourcePID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+            let frontmostApp = NSWorkspace.shared.frontmostApplication
+            let sourcePID = frontmostApp?.bundleIdentifier == Bundle.main.bundleIdentifier
+                ? nil
+                : frontmostApp?.processIdentifier
             log.info("Source app PID: \(sourcePID ?? 0)")
             Task { @MainActor in
                 self?.readSelection(sourcePID: sourcePID)
             }
+            return true
         }
 
         // Global monitor fires when another app is active (requires Accessibility).
-        eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown, handler: handler)
+        eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
+            _ = handler(event)
+        }
         // Local monitor fires when Recite itself is active.
-        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            handler(event)
-            return event
+        localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            handler(event) ? nil : event
         }
         log.info("Global hotkey registered (eventMonitor=\(self.eventMonitor != nil))")
     }
@@ -238,7 +259,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         // If called from hotkey, use provided PID.
         // If called from the app window (sourcePID nil), use last known external app.
-        let pid = sourcePID ?? lastExternalApp?.processIdentifier ?? grabber.captureSourceApp()
+        let currentPID = NSRunningApplication.current.processIdentifier
+        let pid = sourcePID == currentPID ? nil : (sourcePID ?? lastExternalApp?.processIdentifier)
 
         Task {
             log.info("Grabbing selected text from pid \(pid ?? 0)...")
@@ -250,9 +272,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                 log.info("Got text (\(text.count) chars), adding to queue and speaking")
                 await MainActor.run {
                     showPopover()
-                    queue.add(text: text, source: "Selection")
+                    let item = queue.add(text: text, source: "Selection")
                     if engine.state == .idle {
-                        engine.playNext()
+                        queue.play(item: item)
                     }
                 }
             } else {
@@ -270,9 +292,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         guard let text = NSPasteboard.general.string(forType: .string),
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         Task { @MainActor in
-            queue.add(text: text, source: "Clipboard")
+            let item = queue.add(text: text, source: "Clipboard")
             if engine.state == .idle {
-                engine.playNext()
+                queue.play(item: item)
             }
         }
     }

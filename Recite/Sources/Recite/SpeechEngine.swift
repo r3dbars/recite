@@ -68,7 +68,7 @@ class SpeechEngine: NSObject, ObservableObject {
         didSet {
             log.info("Voice changed to: \(self.selectedVoice)")
             UserDefaults.standard.set(selectedVoice, forKey: "selectedVoice")
-            // Re-speak current text with new voice
+            guard state == .playing || state == .paused || state == .generating else { return }
             let textToRepeat = currentText.isEmpty ? ReadingQueue.shared.currentItem?.text : currentText
             if let text = textToRepeat {
                 speak(text)
@@ -198,6 +198,16 @@ class SpeechEngine: NSObject, ObservableObject {
                 let sentences = splitIntoSentences(text)
                 log.info("Split into \(sentences.count) sentences")
 
+                guard !sentences.isEmpty else {
+                    await MainActor.run {
+                        guard self.generationID == myGenID else { return }
+                        self.state = .idle
+                        self.currentText = ""
+                        self.progress = 0
+                    }
+                    return
+                }
+
                 var allSamples: [Float] = []
                 let startTime = CFAbsoluteTimeGetCurrent()
 
@@ -230,6 +240,16 @@ class SpeechEngine: NSObject, ObservableObject {
                 }
 
                 if Task.isCancelled { return }
+
+                guard !allSamples.isEmpty else {
+                    await MainActor.run {
+                        guard self.generationID == myGenID else { return }
+                        self.state = .idle
+                        self.currentText = ""
+                        self.progress = 0
+                    }
+                    return
+                }
 
                 let elapsed = CFAbsoluteTimeGetCurrent() - startTime
                 let audioDuration = Double(allSamples.count) / Self.sampleRate
@@ -288,6 +308,7 @@ class SpeechEngine: NSObject, ObservableObject {
     private func splitIntoSentences(_ text: String) -> [String] {
         let cleaned = preprocessText(text)
         let maxChunkChars = 400
+        guard !cleaned.isEmpty else { return [] }
 
         // Use NSLinguisticTagger for sentence boundary detection — handles
         // abbreviations, "Mr.", decimals, and URLs far better than naive punctuation split.
@@ -308,7 +329,7 @@ class SpeechEngine: NSObject, ObservableObject {
         }
 
         // Fallback: if tagger produced nothing (very short text), use the whole thing
-        if sentences.isEmpty { return [cleaned] }
+        if sentences.isEmpty { return splitByWords(cleaned, maxChars: maxChunkChars) }
 
         // Merge very short sentences into the previous chunk, split oversized ones
         var current = ""
@@ -321,6 +342,11 @@ class SpeechEngine: NSObject, ObservableObject {
                 for clause in clauses {
                     let c = clause.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !c.isEmpty else { continue }
+                    if c.count > maxChunkChars {
+                        if !clauseBuffer.isEmpty { chunks.append(clauseBuffer); clauseBuffer = "" }
+                        chunks.append(contentsOf: splitByWords(c, maxChars: maxChunkChars))
+                        continue
+                    }
                     if clauseBuffer.count + c.count > maxChunkChars {
                         if !clauseBuffer.isEmpty { chunks.append(clauseBuffer) }
                         clauseBuffer = c
@@ -339,6 +365,35 @@ class SpeechEngine: NSObject, ObservableObject {
         if !current.isEmpty { chunks.append(current) }
 
         return chunks.filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
+
+    private func splitByWords(_ text: String, maxChars: Int) -> [String] {
+        var chunks: [String] = []
+        var current = ""
+
+        for word in text.split(separator: " ") {
+            let next = String(word)
+            if next.count > maxChars {
+                if !current.isEmpty {
+                    chunks.append(current)
+                    current = ""
+                }
+                var remainder = next
+                while !remainder.isEmpty {
+                    let end = remainder.index(remainder.startIndex, offsetBy: min(maxChars, remainder.count))
+                    chunks.append(String(remainder[..<end]))
+                    remainder = String(remainder[end...])
+                }
+            } else if current.count + next.count + 1 > maxChars {
+                if !current.isEmpty { chunks.append(current) }
+                current = next
+            } else {
+                current = current.isEmpty ? next : current + " " + next
+            }
+        }
+
+        if !current.isEmpty { chunks.append(current) }
+        return chunks
     }
 
     private func playAudio(_ samples: [Float]) {
@@ -424,6 +479,7 @@ class SpeechEngine: NSObject, ObservableObject {
         playerNode = nil
         timePitchNode = nil
         audioFormat = nil
+        totalSamplesScheduled = 0
     }
 
     func pause() {
@@ -439,6 +495,7 @@ class SpeechEngine: NSObject, ObservableObject {
     }
 
     func stop() {
+        generationID &+= 1
         generationTask?.cancel()
         stopAudioEngine()
         state = .idle

@@ -43,9 +43,11 @@ class ReadingQueue: ObservableObject {
 
     // MARK: - Queue Management
 
-    func add(text: String, source: String = "Unknown") {
+    @discardableResult
+    func add(text: String, source: String = "Unknown") -> Item {
         let item = Item(text: text, source: source, addedAt: Date())
         items.append(item)
+        return item
     }
 
     func remove(at offsets: IndexSet) {
@@ -68,7 +70,11 @@ class ReadingQueue: ObservableObject {
     }
 
     func move(fromOffsets: IndexSet, toOffset: Int) {
+        let currentID = currentItem?.id
         items.move(fromOffsets: fromOffsets, toOffset: toOffset)
+        if let currentID {
+            currentIndex = items.firstIndex { $0.id == currentID }
+        }
     }
 
     // MARK: - Playback Control

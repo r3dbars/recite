@@ -112,12 +112,13 @@ struct MenuBarPopoverView: View {
         VStack(spacing: 0) {
             PopoverRow(
                 icon: "text.cursor",
-                iconColor: Color(NSColor.tertiaryLabelColor),
+                iconColor: popoverIconGray,
                 title: "Read Selection",
-                subtitle: "Coming soon",
-                shortcut: nil,
-                action: nil
-            )
+                subtitle: nil,
+                shortcut: "⌃⌥R"
+            ) {
+                (NSApp.delegate as? AppDelegate)?.readSelection()
+            }
 
             PopoverRow(
                 icon: "doc.on.clipboard",
@@ -128,8 +129,8 @@ struct MenuBarPopoverView: View {
             ) {
                 guard let text = NSPasteboard.general.string(forType: .string),
                       !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-                queue.add(text: text, source: "Clipboard")
-                if engine.state == .idle { queue.playNext() }
+                let item = queue.add(text: text, source: "Clipboard")
+                if engine.state == .idle { queue.play(item: item) }
             }
 
             if engine.state == .playing || engine.state == .paused || engine.state == .generating {
@@ -305,7 +306,7 @@ struct ReciteSidebar: View {
             Divider()
 
             HStack {
-                Text("Version 1.0")
+                Text("Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0")")
                     .font(.system(size: 11))
                     .foregroundColor(Color(NSColor.tertiaryLabelColor))
                 Spacer()
@@ -461,11 +462,12 @@ struct PlayerDetailView: View {
                 VStack(spacing: 1) {
                     ActionCard(
                         icon: "text.cursor",
-                        iconColor: Color(NSColor.tertiaryLabelColor),
+                        iconColor: .accentColor,
                         title: "Read Selection",
-                        subtitle: "Coming soon — global hotkey ⌃⌥R",
-                        disabled: true
-                    ) {}
+                        subtitle: "Read the selected text from your last app."
+                    ) {
+                        (NSApp.delegate as? AppDelegate)?.readSelection()
+                    }
 
                     ActionCard(
                         icon: "doc.on.clipboard",
@@ -475,8 +477,8 @@ struct PlayerDetailView: View {
                     ) {
                         guard let text = NSPasteboard.general.string(forType: .string),
                               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-                        queue.add(text: text, source: "Clipboard")
-                        if engine.state == .idle { queue.playNext() }
+                        let item = queue.add(text: text, source: "Clipboard")
+                        if engine.state == .idle { queue.play(item: item) }
                     }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -699,8 +701,8 @@ struct HistoryDetailView: View {
                     ForEach(queue.history) { item in
                         HistoryItemRow(item: item)
                             .onTapGesture {
-                                queue.add(text: item.text, source: item.source)
-                                queue.playNext()
+                                let replay = queue.add(text: item.text, source: item.source)
+                                queue.play(item: replay)
                             }
                     }
                 }
@@ -763,15 +765,15 @@ struct ShortcutsDetailView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
 
-                shortcutSection("Reading", subtitle: "Planned — coming in a future update.") {
-                    ShortcutRow(keys: ["⌃", "⌥", "R"], label: "Read Selection", detail: "Will read selected text in the frontmost app system-wide. Not yet active.", comingSoon: true)
+                shortcutSection("Reading", subtitle: "System-wide reading shortcut.") {
+                    ShortcutRow(keys: ["⌃", "⌥", "R"], label: "Read Selection", detail: "Read selected text in the frontmost app system-wide.")
                 }
 
                 shortcutSection("Playback", subtitle: "Control audio while Recite is focused.") {
                     ShortcutRow(keys: ["Space"], label: "Play / Pause", detail: "Toggle playback.")
                 }
 
-                shortcutSection("How ⌃⌥R Will Work", subtitle: nil) {
+                shortcutSection("How ⌃⌥R Works", subtitle: nil) {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack(alignment: .top, spacing: 10) {
                             Text("1")
@@ -1034,12 +1036,13 @@ private struct AboutBadgeRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            ForEach(items, id: \.1) { icon, label in
+            ForEach(items.indices, id: \.self) { index in
+                let item = items[index]
                 HStack(spacing: 5) {
-                    Image(systemName: icon)
+                    Image(systemName: item.0)
                         .font(.system(size: 11))
                         .foregroundColor(.accentColor)
-                    Text(label)
+                    Text(item.1)
                         .font(.system(size: 11))
                         .foregroundColor(.secondary)
                 }

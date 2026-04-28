@@ -4,8 +4,7 @@ All source code is written and ready. ~10 minutes to wire up in Xcode.
 
 ## Requirements
 - macOS 14.0+ (Sonoma or later)
-- Xcode 15+
-- Swift 5.9+
+- Xcode with Swift 6.2+
 - Apple Silicon Mac (M1 or later) — required for MLX inference
 
 ---
@@ -27,8 +26,8 @@ All source code is written and ready. ~10 minutes to wire up in Xcode.
 ## Step 2 — Add mlx-audio-swift Package
 
 1. In Xcode: **File → Add Package Dependencies…**
-2. Enter the URL: `https://github.com/Blaizzy/mlx-audio-swift.git`
-3. Set dependency rule to **Branch → `main`**
+2. Enter the URL: `https://github.com/r3dbars/mlx-audio-swift.git`
+3. Set dependency rule to **Branch → `codex/recite-tts-manifest-fix`**
 4. Click **Add Package**
 5. In the "Choose Package Products" dialog, add these to your target:
    - `MLXAudioTTS`
@@ -67,8 +66,8 @@ Add to the **Info** tab of your target:
 
 | Key | Type | Value |
 |-----|------|-------|
-| `LSUIElement` | Boolean | YES |
 | `NSAppleEventsUsageDescription` | String | Recite needs accessibility access to read selected text from any app. |
+| `NSAccessibilityUsageDescription` | String | Recite needs accessibility access to read selected text from other applications. |
 
 Or replace the generated `Info.plist` with `Recite/Resources/Info.plist`.
 
@@ -84,18 +83,18 @@ Or replace the generated `Info.plist` with `Recite/Resources/Info.plist`.
 
 ## Step 7 — Build & Run
 
-Hit **⌘R**. Recite appears in the menu bar as a headphones icon.
+Run `./scripts/build-and-run.sh`, or hit **⌘R** from Xcode. Recite opens a main window and also appears in the menu bar.
 
 **First launch:**
-1. The Qwen3-TTS model (~1.2 GB) downloads automatically from Hugging Face
-2. You'll see "Loading Qwen3-TTS…" in the popover while the model initializes
-3. Once loaded, the status changes to "Qwen3-TTS ready"
+1. The Kokoro 82M model downloads automatically from Hugging Face
+2. You'll see "Loading Model…" while the model initializes
+3. Once loaded, the status changes to "Kokoro TTS Ready"
 4. Grant Accessibility permission when prompted
 
 **Using Recite:**
 1. Select any text in any app
-2. Press **⌘⇧R** — Recite generates speech and reads it aloud
-3. Or click the menu bar icon → **Add Clipboard** to queue clipboard text
+2. Press **⌃⌥R** — Recite generates speech and reads it aloud
+3. Or click the menu bar icon → **Add Clipboard** to read clipboard text
 4. Use the speed control (0.5x – 2x) to adjust playback speed
 
 > **Note:** First generation takes a few seconds while the model warms up. Subsequent generations are faster.
@@ -106,16 +105,16 @@ Hit **⌘R**. Recite appears in the menu bar as a headphones icon.
 
 ```
 ReciteApp.swift      — @main, SwiftUI lifecycle
-AppDelegate.swift    — NSStatusItem, popover, global hotkey (⌘⇧R),
+AppDelegate.swift    — NSStatusItem, popover, global hotkey (⌃⌥R),
                        context menu, model loading on launch
 TextGrabber.swift    — Gets selected text via AX API, falls back to ⌘C simulation
-SpeechEngine.swift   — Qwen3-TTS via mlx-audio-swift, audio generation + playback
+SpeechEngine.swift   — Kokoro 82M via mlx-audio-swift, audio generation + playback
 ReadingQueue.swift   — Queue of text items, auto-advance on completion
 MenuBarView.swift    — SwiftUI popover: player controls, model status, queue, settings
 ```
 
 **Key design decisions:**
-- Qwen3-TTS via mlx-audio-swift — high-quality neural TTS, 100% on-device via MLX
+- Kokoro 82M via mlx-audio-swift — high-quality neural TTS, 100% on-device via MLX
 - Model auto-downloads on first launch from Hugging Face (mlx-community)
 - WAV audio generation → AVAudioPlayer for playback with variable speed
 - Accessibility API first, clipboard simulation fallback
@@ -140,6 +139,6 @@ MenuBarView.swift    — SwiftUI popover: player controls, model status, queue, 
 - Some apps block AX text reading — clipboard fallback will activate automatically
 
 **Build errors with mlx-audio-swift:**
-- Ensure Xcode 15+ and Swift 5.9+
+- Ensure your Xcode toolchain includes Swift 6.2+
 - Clean build folder: Product → Clean Build Folder (⌘⇧K)
 - Reset package cache: File → Packages → Reset Package Caches

@@ -6,6 +6,9 @@
     <key>NSAppleEventsUsageDescription</key>
     <string>Recite needs accessibility access to read selected text from any app.</string>
 
+    <key>NSAccessibilityUsageDescription</key>
+    <string>Recite needs accessibility access to read selected text from other applications.</string>
+
     <key>CFBundleName</key>
     <string>Recite</string>
 
@@ -14,6 +17,9 @@
 
     <key>CFBundleIdentifier</key>
     <string>com.r3dbars.recite</string>
+
+    <key>CFBundleExecutable</key>
+    <string>Recite</string>
 
     <key>CFBundleVersion</key>
     <string>1</string>
