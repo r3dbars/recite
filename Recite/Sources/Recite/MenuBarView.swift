@@ -1189,30 +1189,46 @@ struct SettingsDetailView: View {
                 GroupBox {
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(SpeechEngine.voicePresets) { preset in
-                            Button {
-                                engine.selectedVoice = preset.kokoroVoice
-                            } label: {
-                                HStack(spacing: 10) {
-                                    Image(systemName: engine.selectedVoice == preset.kokoroVoice
-                                          ? "checkmark.circle.fill" : "circle")
-                                        .foregroundColor(engine.selectedVoice == preset.kokoroVoice
-                                                         ? .accentColor : Color(NSColor.quaternaryLabelColor))
-                                        .font(.system(size: 14))
+                            HStack(spacing: 10) {
+                                Button {
+                                    engine.selectedVoice = preset.kokoroVoice
+                                } label: {
+                                    HStack(spacing: 10) {
+                                        Image(systemName: engine.selectedVoice == preset.kokoroVoice
+                                              ? "checkmark.circle.fill" : "circle")
+                                            .foregroundColor(engine.selectedVoice == preset.kokoroVoice
+                                                             ? .accentColor : Color(NSColor.quaternaryLabelColor))
+                                            .font(.system(size: 14))
 
-                                    Text(preset.name)
-                                        .font(.system(size: 13))
-                                        .foregroundColor(.primary)
+                                        Text(preset.name)
+                                            .font(.system(size: 13))
+                                            .foregroundColor(.primary)
 
-                                    Text(preset.kokoroVoice)
-                                        .font(.system(size: 11))
-                                        .foregroundColor(.secondary)
+                                        Text(preset.kokoroVoice)
+                                            .font(.system(size: 11))
+                                            .foregroundColor(.secondary)
 
-                                    Spacer()
+                                        Spacer()
+                                    }
+                                    .contentShape(Rectangle())
                                 }
-                                .padding(.vertical, 5)
-                                .contentShape(Rectangle())
+                                .buttonStyle(.plain)
+
+                                Button {
+                                    engine.previewVoice(preset)
+                                } label: {
+                                    Image(systemName: engine.previewingVoice == preset.kokoroVoice
+                                          ? "stop.fill" : "play.fill")
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .frame(width: 22, height: 22)
+                                }
+                                .buttonStyle(.borderless)
+                                .disabled(engine.modelStatus != .ready || engine.state != .idle)
+                                .help(engine.previewingVoice == preset.kokoroVoice
+                                      ? "Stop preview"
+                                      : "Preview \(preset.name)")
                             }
-                            .buttonStyle(.plain)
+                            .padding(.vertical, 5)
 
                             if preset.id != SpeechEngine.voicePresets.last?.id {
                                 Divider()

@@ -63,6 +63,7 @@ class SpeechEngine: NSObject, ObservableObject {
     @Published var currentText: String = ""
     @Published var progress: Double = 0
     @Published var speed: Double = 1.0  // 0.5x – 2.0x playback speed
+    @Published var previewingVoice: String?
     @Published var selectedVoice: String = UserDefaults.standard.string(forKey: "selectedVoice")
         ?? VoicePreset.defaultPreset.kokoroVoice {
         didSet {
@@ -109,6 +110,9 @@ class SpeechEngine: NSObject, ObservableObject {
     private var streamingGenerationComplete = false
     private var streamingPlaybackStarted = false
     private var progressTask: Task<Void, Never>?
+    private var previewTask: Task<Void, Never>?
+    private var previewAudioEngine: AVAudioEngine?
+    private var previewPlayerNode: AVAudioPlayerNode?
 
     private static let modelID = "mlx-community/Kokoro-82M-bf16"
     private static let sampleRate: Double = 24000
@@ -178,6 +182,97 @@ class SpeechEngine: NSObject, ObservableObject {
         return false
     }
 
+    // MARK: - Voice Preview
+
+    func previewVoice(_ preset: VoicePreset) {
+        if previewingVoice == preset.kokoroVoice {
+            stopVoicePreview()
+            return
+        }
+
+        guard modelStatus == .ready, let model else {
+            log.warning("previewVoice() called but model not ready")
+            return
+        }
+
+        stopVoicePreview()
+        previewingVoice = preset.kokoroVoice
+
+        previewTask = Task {
+            do {
+                let params = GenerateParameters()
+                let sampleText = "Hi, I'm \(preset.name). This is how I sound reading with Recite."
+                let audio = try await model.generate(
+                    text: sampleText,
+                    voice: preset.kokoroVoice,
+                    refAudio: nil,
+                    refText: nil,
+                    language: "en-us",
+                    generationParameters: params
+                )
+                if Task.isCancelled { return }
+                let samples = audio.asArray(Float.self)
+                await MainActor.run {
+                    guard self.previewingVoice == preset.kokoroVoice else { return }
+                    self.playVoicePreview(samples, voiceID: preset.kokoroVoice)
+                }
+            } catch {
+                log.error("Voice preview failed: \(error.localizedDescription)")
+                await MainActor.run {
+                    guard self.previewingVoice == preset.kokoroVoice else { return }
+                    self.stopVoicePreview()
+                }
+            }
+        }
+    }
+
+    func stopVoicePreview() {
+        previewTask?.cancel()
+        previewTask = nil
+        previewPlayerNode?.stop()
+        previewAudioEngine?.stop()
+        previewPlayerNode = nil
+        previewAudioEngine = nil
+        previewingVoice = nil
+    }
+
+    private func playVoicePreview(_ samples: [Float], voiceID: String) {
+        let engine = AVAudioEngine()
+        let player = AVAudioPlayerNode()
+        let format = AVAudioFormat(standardFormatWithSampleRate: Self.sampleRate, channels: 1)!
+
+        engine.attach(player)
+        engine.connect(player, to: engine.mainMixerNode, format: format)
+
+        let frameCount = AVAudioFrameCount(samples.count)
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
+            stopVoicePreview()
+            return
+        }
+        buffer.frameLength = frameCount
+        let channelData = buffer.floatChannelData![0]
+        for i in 0..<samples.count {
+            channelData[i] = max(-1.0, min(1.0, samples[i]))
+        }
+
+        do {
+            try engine.start()
+            previewAudioEngine = engine
+            previewPlayerNode = player
+            player.scheduleBuffer(buffer) { [weak self] in
+                Task { @MainActor in
+                    guard let self, self.previewingVoice == voiceID else { return }
+                    self.stopVoicePreview()
+                }
+            }
+            player.play()
+            log.info("Voice preview started for \(voiceID)")
+        } catch {
+            log.error("Voice preview audio failed: \(error.localizedDescription)")
+            stopVoicePreview()
+        }
+    }
+
     // MARK: - Playback
 
     func speak(_ text: String) {
@@ -189,6 +284,7 @@ class SpeechEngine: NSObject, ObservableObject {
         log.info("speak() called with \(text.count) chars")
 
         // Cancel any in-progress generation
+        stopVoicePreview()
         generationTask?.cancel()
         stopAudioEngine()
 
@@ -625,6 +721,7 @@ class SpeechEngine: NSObject, ObservableObject {
     }
 
     func stop() {
+        stopVoicePreview()
         generationID &+= 1
         generationTask?.cancel()
         stopAudioEngine()
