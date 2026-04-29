@@ -201,7 +201,7 @@ class SpeechEngine: NSObject, ObservableObject {
         previewTask = Task {
             do {
                 let params = GenerateParameters()
-                let sampleText = "Hi, I'm \(preset.name), this is how I sound reading with Recite."
+                let sampleText = "Hi, I'm \(preset.name). This is how I sound reading with Recite."
                 let audio = try await model.generate(
                     text: sampleText,
                     voice: preset.kokoroVoice,
