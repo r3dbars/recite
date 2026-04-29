@@ -272,7 +272,7 @@ class SpeechEngine: NSObject, ObservableObject {
                     )
                     let shouldStartPlayback = generatedAudioSeconds >= startupTarget || i == sentences.count - 1
 
-                    log.info("Sentence \(i+1): \(samples.count) samples (\(String(format: "%.2f", chunkAudioSeconds))s), generation \(String(format: "%.2f", generationRate))x audio-time, startup target \(String(format: "%.2f", startupTarget))s")
+                    log.info("Sentence \(i+1, privacy: .public): \(samples.count, privacy: .public) samples (\(String(format: "%.2f", chunkAudioSeconds), privacy: .public)s), generation \(String(format: "%.2f", generationRate), privacy: .public)x audio-time, startup target \(String(format: "%.2f", startupTarget), privacy: .public)s")
 
                     await MainActor.run {
                         guard self.generationID == myGenID else { return }
@@ -284,7 +284,7 @@ class SpeechEngine: NSObject, ObservableObject {
                         self.streamingPlaybackStarted = true
                         self.playerNode?.play()
                         self.state = .playing
-                        log.info("Streaming playback started after buffering \(String(format: "%.2f", generatedAudioSeconds))s audio; generation rate \(String(format: "%.2f", generationRate))x, playback rate \(String(format: "%.2f", self.speed))x")
+                        log.info("Streaming playback started after buffering \(String(format: "%.2f", generatedAudioSeconds), privacy: .public)s audio; generation rate \(String(format: "%.2f", generationRate), privacy: .public)x, playback rate \(String(format: "%.2f", self.speed), privacy: .public)x")
                     }
                 }
 
@@ -512,9 +512,9 @@ class SpeechEngine: NSObject, ObservableObject {
            bufferedAudioSeconds() >= resumeBufferTargetSeconds() {
             player.play()
             state = .playing
-            log.info("Playback resumed with \(String(format: "%.2f", self.bufferedAudioSeconds()))s buffered")
+            log.info("Playback resumed with \(String(format: "%.2f", self.bufferedAudioSeconds()), privacy: .public)s buffered")
         }
-        log.info("Scheduled streaming chunk \(self.playbackChunksScheduled): \(String(format: "%.2f", Double(samples.count) / Self.sampleRate))s audio")
+        log.info("Scheduled streaming chunk \(self.playbackChunksScheduled, privacy: .public): \(String(format: "%.2f", Double(samples.count) / Self.sampleRate), privacy: .public)s audio")
     }
 
     private func setupAudioEngine() {
