@@ -43,10 +43,19 @@ if [ -d "$MLX_METAL_SOURCES" ]; then
   rm -rf "$TMP_METAL_DIR"
 fi
 
-if [ -n "$REQUESTED_IDENTITY" ] && security find-identity -v -p codesigning | grep -Fq "$REQUESTED_IDENTITY"; then
+SIGNING_IDENTITIES="$(security find-identity -v -p codesigning)"
+if [ -n "$REQUESTED_IDENTITY" ] && echo "$SIGNING_IDENTITIES" | grep -Fq "$REQUESTED_IDENTITY"; then
   SIGN_IDENTITY="$REQUESTED_IDENTITY"
 else
-  SIGN_IDENTITY="-"
+  # Prefer a certificate hash so duplicate keychain identities do not make
+  # codesign fail with an "ambiguous" identity error.
+  SIGN_IDENTITY="$(echo "$SIGNING_IDENTITIES" | awk '/Developer ID Application: Justin Betker/ { print $2; exit }')"
+  if [ -z "$SIGN_IDENTITY" ]; then
+    SIGN_IDENTITY="$(echo "$SIGNING_IDENTITIES" | awk '/Apple Development: Justin Betker/ { print $2; exit }')"
+  fi
+  if [ -z "$SIGN_IDENTITY" ]; then
+    SIGN_IDENTITY="-"
+  fi
 fi
 
 echo "==> Signing with: $SIGN_IDENTITY"
