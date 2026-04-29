@@ -1,144 +1,99 @@
-# Setting Up Recite in Xcode
+# Setup
 
-All source code is written and ready. ~10 minutes to wire up in Xcode.
+This repo is a Swift Package macOS app. You can build it from Terminal, then use the helper script to assemble and launch a local `.app` bundle.
 
 ## Requirements
-- macOS 14.0+ (Sonoma or later)
-- Xcode with Swift 6.2+
-- Apple Silicon Mac (M1 or later) — required for MLX inference
 
----
+- macOS 14 or newer
+- Apple Silicon Mac
+- Xcode / Swift toolchain
+- Homebrew
+- `espeak-ng`
 
-## Step 1 — Create the Xcode Project
+## First-Time Setup
 
-1. Open Xcode → **File > New > Project**
-2. Select **macOS → App**
-3. Configure:
-   - **Product Name:** `Recite`
-   - **Bundle Identifier:** `com.r3dbars.recite`
-   - **Interface:** `SwiftUI`
-   - **Life Cycle:** `SwiftUI App`
-   - **Language:** `Swift`
-4. Save inside this repo directory
-
----
-
-## Step 2 — Add mlx-audio-swift Package
-
-1. In Xcode: **File → Add Package Dependencies…**
-2. Enter the URL: `https://github.com/r3dbars/mlx-audio-swift.git`
-3. Set dependency rule to **Branch → `codex/recite-tts-manifest-fix`**
-4. Click **Add Package**
-5. In the "Choose Package Products" dialog, add these to your target:
-   - `MLXAudioTTS`
-   - `MLXAudioCore`
-6. Click **Add Package**
-
-> The package will also pull in `mlx-swift` and `swift-numerics` automatically.
-
----
-
-## Step 3 — Replace Generated Files
-
-Delete from Xcode project navigator:
-- `ContentView.swift`
-- `ReciteApp.swift` (the generated one)
-
----
-
-## Step 4 — Add Source Files
-
-Drag all files from `Recite/Sources/Recite/` into the project:
-- `ReciteApp.swift`
-- `AppDelegate.swift`
-- `SpeechEngine.swift`
-- `ReadingQueue.swift`
-- `TextGrabber.swift`
-- `MenuBarView.swift`
-
-Uncheck "Copy items if needed."
-
----
-
-## Step 5 — Info.plist
-
-Add to the **Info** tab of your target:
-
-| Key | Type | Value |
-|-----|------|-------|
-| `NSAppleEventsUsageDescription` | String | Recite needs accessibility access to read selected text from any app. |
-| `NSAccessibilityUsageDescription` | String | Recite needs accessibility access to read selected text from other applications. |
-
-Or replace the generated `Info.plist` with `Recite/Resources/Info.plist`.
-
----
-
-## Step 6 — Signing & Capabilities
-
-1. **Signing & Capabilities** → set your Apple Developer team
-2. Add **Accessibility** capability (or add `Recite.entitlements` from `Recite/Resources/`)
-3. When the app first launches, it will prompt for Accessibility permission in **System Settings → Privacy & Security → Accessibility**
-
----
-
-## Step 7 — Build & Run
-
-Run `./scripts/build-and-run.sh`, or hit **⌘R** from Xcode. Recite opens a main window and also appears in the menu bar.
-
-**First launch:**
-1. The Kokoro 82M model downloads automatically from Hugging Face
-2. You'll see "Loading Model…" while the model initializes
-3. Once loaded, the status changes to "Kokoro TTS Ready"
-4. Grant Accessibility permission when prompted
-
-**Using Recite:**
-1. Select any text in any app
-2. Press **⌃⌥R** — Recite generates speech and reads it aloud
-3. Or click the menu bar icon → **Add Clipboard** to read clipboard text
-4. Use the speed control (0.5x – 2x) to adjust playback speed
-
-> **Note:** First generation takes a few seconds while the model warms up. Subsequent generations are faster.
-
----
-
-## Architecture
-
-```
-ReciteApp.swift      — @main, SwiftUI lifecycle
-AppDelegate.swift    — NSStatusItem, popover, global hotkey (⌃⌥R),
-                       context menu, model loading on launch
-TextGrabber.swift    — Gets selected text via AX API, falls back to ⌘C simulation
-SpeechEngine.swift   — Kokoro 82M via mlx-audio-swift, audio generation + playback
-ReadingQueue.swift   — Queue of text items, auto-advance on completion
-MenuBarView.swift    — SwiftUI popover: player controls, model status, queue, settings
+```bash
+git submodule update --init --recursive
+brew install espeak-ng
+swift build
 ```
 
-**Key design decisions:**
-- Kokoro 82M via mlx-audio-swift — high-quality neural TTS, 100% on-device via MLX
-- Model auto-downloads on first launch from Hugging Face (mlx-community)
-- WAV audio generation → AVAudioPlayer for playback with variable speed
-- Accessibility API first, clipboard simulation fallback
-- Queue + auto-advance — add multiple items, walk away and listen
-- Speed control — 0.5x to 2x playback rate
+The app depends on `local-deps/mlx-audio-swift`, which is tracked as a git submodule.
 
----
+## Run The App
+
+```bash
+./scripts/build-and-run.sh
+```
+
+The script:
+
+1. Runs `swift build`.
+2. Stops any existing `Recite` process.
+3. Assembles `.build/debug/Recite.app`.
+4. Signs it ad-hoc by default.
+5. Opens the app.
+
+If you want to use a real local signing identity, pass it with:
+
+```bash
+RECITE_CODESIGN_IDENTITY="Apple Development: Your Name (TEAMID)" ./scripts/build-and-run.sh
+```
+
+## First Launch
+
+1. Recite asks for Accessibility permission.
+2. The Kokoro 82M model downloads from Hugging Face.
+3. The menu bar status changes to ready when the model is loaded.
+
+Then select text in another app and press **Control + Option + R**.
+
+## Project Map
+
+```text
+Package.swift                 Swift Package entry point
+scripts/build-and-run.sh       Local app bundle builder
+Recite/Sources/Recite/
+  ReciteApp.swift              SwiftUI app entry
+  AppDelegate.swift            Menu bar, hotkey, app lifecycle
+  TextGrabber.swift            Accessibility and clipboard text capture
+  SpeechEngine.swift           Kokoro model loading and audio playback
+  ReadingQueue.swift           Queue and local history
+  MenuBarView.swift            Popover, main window, settings
+Recite/Resources/
+  Info.plist                   App metadata and privacy strings
+  Recite.entitlements          Local development entitlements
+```
 
 ## Troubleshooting
 
-**Model won't load:**
-- Ensure you're on Apple Silicon (M1+). Intel Macs are not supported.
-- Check internet connection — the model downloads from Hugging Face on first launch.
-- Look for errors in the menu bar popover or Xcode console.
+### `mlx-audio-swift/Package.swift` is missing
 
-**No sound:**
-- Check System Settings → Sound → Output device
-- Ensure the app isn't generating (look for "Generating…" indicator)
+Run:
 
-**Hotkey doesn't work:**
-- Grant Accessibility permission: System Settings → Privacy & Security → Accessibility → enable Recite
-- Some apps block AX text reading — clipboard fallback will activate automatically
+```bash
+git submodule update --init --recursive
+```
 
-**Build errors with mlx-audio-swift:**
-- Ensure your Xcode toolchain includes Swift 6.2+
-- Clean build folder: Product → Clean Build Folder (⌘⇧K)
-- Reset package cache: File → Packages → Reset Package Caches
+### Model will not load
+
+- Confirm you are on Apple Silicon.
+- Confirm the first launch has internet access for the model download.
+- Confirm `espeak-ng` is installed with `brew install espeak-ng`.
+
+### Hotkey does not work
+
+Grant Accessibility permission in:
+
+```text
+System Settings -> Privacy & Security -> Accessibility
+```
+
+Then restart Recite.
+
+### Build cache feels stale
+
+```bash
+swift package reset
+swift build
+```

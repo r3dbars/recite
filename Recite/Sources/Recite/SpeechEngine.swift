@@ -9,9 +9,10 @@ import os.log
 private let log = Logger(subsystem: "com.r3dbars.recite", category: "SpeechEngine")
 
 struct VoicePreset: Identifiable, Hashable {
-    let id = UUID()
     let name: String
     let kokoroVoice: String
+
+    var id: String { kokoroVoice }
 
     static let defaultPreset = VoicePreset(
         name: "Heart",
@@ -19,21 +20,61 @@ struct VoicePreset: Identifiable, Hashable {
     )
 }
 
+private enum EspeakTextProcessorError: LocalizedError {
+    case missingExecutable
+    case failed(status: Int32, stderr: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .missingExecutable:
+            return "espeak-ng was not found. Install it with `brew install espeak-ng`."
+        case let .failed(status, stderr):
+            if stderr.isEmpty {
+                return "espeak-ng exited with status \(status)."
+            }
+            return "espeak-ng exited with status \(status): \(stderr)"
+        }
+    }
+}
+
 /// espeak-ng based text processor for converting plain text to IPA phonemes.
 struct EspeakTextProcessor: TextProcessor {
+    private static let executablePaths = [
+        "/opt/homebrew/bin/espeak-ng",
+        "/usr/local/bin/espeak-ng",
+        "/usr/bin/espeak-ng",
+    ]
+
+    static var installedExecutablePath: String? {
+        executablePaths.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
     func process(text: String, language: String?) throws -> String {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/opt/homebrew/bin/espeak-ng")
+        guard let executablePath = Self.installedExecutablePath else {
+            throw EspeakTextProcessorError.missingExecutable
+        }
+
+        process.executableURL = URL(fileURLWithPath: executablePath)
         process.arguments = ["--ipa", "-q", text]
 
         let pipe = Pipe()
+        let errorPipe = Pipe()
         process.standardOutput = pipe
-        process.standardError = Pipe()
+        process.standardError = errorPipe
 
         try process.run()
         process.waitUntilExit()
 
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
+        let stderr = String(data: errorData, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        guard process.terminationStatus == 0 else {
+            throw EspeakTextProcessorError.failed(status: process.terminationStatus, stderr: stderr)
+        }
+
         let ipa = String(data: data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
@@ -62,7 +103,15 @@ class SpeechEngine: NSObject, ObservableObject {
     @Published var modelStatus: ModelStatus = .notLoaded
     @Published var currentText: String = ""
     @Published var progress: Double = 0
-    @Published var speed: Double = 1.0  // 0.5x – 2.0x playback speed
+    @Published var speed: Double = {
+        let saved = UserDefaults.standard.double(forKey: "playbackSpeed")
+        guard saved >= 0.5, saved <= 2.0 else { return 1.0 }
+        return saved
+    }() {
+        didSet {
+            UserDefaults.standard.set(speed, forKey: "playbackSpeed")
+        }
+    }
     @Published var previewingVoice: String?
     @Published var selectedVoice: String = UserDefaults.standard.string(forKey: "selectedVoice")
         ?? VoicePreset.defaultPreset.kokoroVoice {
@@ -171,6 +220,9 @@ class SpeechEngine: NSObject, ObservableObject {
             self.model = loaded
             modelStatus = .ready
             log.info("Kokoro model loaded successfully")
+            if state == .idle, let item = ReadingQueue.shared.currentItem {
+                speak(item.text)
+            }
         } catch {
             log.error("Model load failed: \(error.localizedDescription)")
             modelStatus = .error(error.localizedDescription)
@@ -318,9 +370,10 @@ class SpeechEngine: NSObject, ObservableObject {
                 var generatedAudioSeconds = 0.0
                 var generatedTextChars = 0
                 var playbackHasStarted = false
+                var audioEngineReady = true
                 await MainActor.run {
                     guard self.generationID == myGenID else { return }
-                    self.setupAudioEngine()
+                    audioEngineReady = self.setupAudioEngine()
                     self.startProgressTracker(totalEstimatedAudioSeconds: {
                         let textRatio = totalTextChars > 0
                             ? Double(generatedTextChars) / Double(totalTextChars)
@@ -329,6 +382,14 @@ class SpeechEngine: NSObject, ObservableObject {
                         return max(generatedAudioSeconds / textRatio, generatedAudioSeconds)
                     })
                 }
+                guard audioEngineReady else {
+                    await MainActor.run {
+                        guard self.generationID == myGenID else { return }
+                        self.state = .idle
+                        self.progress = 0
+                    }
+                    return
+                }
 
                 for (i, sentence) in sentences.enumerated() {
                     if Task.isCancelled { return }
@@ -336,7 +397,7 @@ class SpeechEngine: NSObject, ObservableObject {
                     let trimmed = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !trimmed.isEmpty else { continue }
 
-                    log.info("Generating sentence \(i+1)/\(sentences.count): \(String(trimmed.prefix(50)))...")
+                    log.info("Generating sentence \(i+1)/\(sentences.count) (\(trimmed.count) chars)")
 
                     let params = GenerateParameters()
                     let audio = try await model.generate(
@@ -405,6 +466,7 @@ class SpeechEngine: NSObject, ObservableObject {
                         guard self.generationID == myGenID else { return }
                         state = .idle
                         currentText = ""
+                        progress = 0
                     }
                 }
             }
@@ -575,10 +637,18 @@ class SpeechEngine: NSObject, ObservableObject {
         guard let player = playerNode, let format = audioFormat else { return }
 
         let frameCount = AVAudioFrameCount(samples.count)
-        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else { return }
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
+            state = .idle
+            progress = 0
+            return
+        }
         buffer.frameLength = frameCount
 
-        let channelData = buffer.floatChannelData![0]
+        guard let channelData = buffer.floatChannelData?[0] else {
+            state = .idle
+            progress = 0
+            return
+        }
         for i in 0..<samples.count {
             channelData[i] = max(-1.0, min(1.0, samples[i]))
         }
@@ -613,7 +683,7 @@ class SpeechEngine: NSObject, ObservableObject {
         log.info("Scheduled streaming chunk \(self.playbackChunksScheduled, privacy: .public): \(String(format: "%.2f", Double(samples.count) / Self.sampleRate), privacy: .public)s audio")
     }
 
-    private func setupAudioEngine() {
+    private func setupAudioEngine() -> Bool {
         let engine = AVAudioEngine()
         let player = AVAudioPlayerNode()
         let timePitch = AVAudioUnitTimePitch()
@@ -637,8 +707,10 @@ class SpeechEngine: NSObject, ObservableObject {
             self.streamingGenerationComplete = false
             self.streamingPlaybackStarted = false
             log.info("Audio engine started (speed: \(self.speed)x)")
+            return true
         } catch {
             log.error("Failed to start audio engine: \(error.localizedDescription)")
+            return false
         }
     }
 
@@ -745,8 +817,9 @@ class SpeechEngine: NSObject, ObservableObject {
     }
 
     func updateSpeed(_ newSpeed: Double) {
-        speed = newSpeed
-        timePitchNode?.rate = Float(newSpeed)
-        log.info("Speed updated to \(newSpeed)x")
+        let clampedSpeed = min(max(newSpeed, 0.5), 2.0)
+        speed = clampedSpeed
+        timePitchNode?.rate = Float(clampedSpeed)
+        log.info("Speed updated to \(clampedSpeed)x")
     }
 }

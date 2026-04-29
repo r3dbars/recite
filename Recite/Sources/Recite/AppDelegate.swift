@@ -278,7 +278,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                 }
             } else {
-                log.warning("No text found from selection (text=\(text ?? "nil"))")
+                log.warning("No text found from selection")
                 await MainActor.run { showPopover() }
             }
         }
