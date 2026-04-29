@@ -104,9 +104,18 @@ class SpeechEngine: NSObject, ObservableObject {
     private var timePitchNode: AVAudioUnitTimePitch?
     private var audioFormat: AVAudioFormat?
     private var totalSamplesScheduled = 0
+    private var playbackChunksScheduled = 0
+    private var playbackChunksCompleted = 0
+    private var streamingGenerationComplete = false
+    private var streamingPlaybackStarted = false
+    private var progressTask: Task<Void, Never>?
 
     private static let modelID = "mlx-community/Kokoro-82M-bf16"
     private static let sampleRate: Double = 24000
+    private static let fastEnoughMargin = 1.15
+    private static let minimumStartupBufferSeconds = 1.25
+    private static let comfortableStartupBufferSeconds = 3.0
+    private static let lowWaterWallSeconds = 2.5
 
     override init() {
         super.init()
@@ -208,8 +217,22 @@ class SpeechEngine: NSObject, ObservableObject {
                     return
                 }
 
-                var allSamples: [Float] = []
-                let startTime = CFAbsoluteTimeGetCurrent()
+                let generationStartTime = CFAbsoluteTimeGetCurrent()
+                let totalTextChars = sentences.reduce(0) { $0 + $1.count }
+                var generatedAudioSeconds = 0.0
+                var generatedTextChars = 0
+                var playbackHasStarted = false
+                await MainActor.run {
+                    guard self.generationID == myGenID else { return }
+                    self.setupAudioEngine()
+                    self.startProgressTracker(totalEstimatedAudioSeconds: {
+                        let textRatio = totalTextChars > 0
+                            ? Double(generatedTextChars) / Double(totalTextChars)
+                            : 1.0
+                        guard textRatio > 0 else { return generatedAudioSeconds }
+                        return max(generatedAudioSeconds / textRatio, generatedAudioSeconds)
+                    })
+                }
 
                 for (i, sentence) in sentences.enumerated() {
                     if Task.isCancelled { return }
@@ -230,35 +253,53 @@ class SpeechEngine: NSObject, ObservableObject {
                     )
 
                     let samples = audio.asArray(Float.self)
-                    log.info("Sentence \(i+1): \(samples.count) samples (\(Double(samples.count) / Self.sampleRate)s)")
-                    allSamples.append(contentsOf: samples)
+                    let chunkAudioSeconds = Double(samples.count) / Self.sampleRate
+                    generatedAudioSeconds += chunkAudioSeconds
+                    generatedTextChars += trimmed.count
+
+                    let elapsed = max(CFAbsoluteTimeGetCurrent() - generationStartTime, 0.001)
+                    let generationRate = generatedAudioSeconds / elapsed
+                    let estimatedTotalAudioSeconds = estimateTotalAudioSeconds(
+                        generatedAudioSeconds: generatedAudioSeconds,
+                        generatedTextChars: generatedTextChars,
+                        totalTextChars: totalTextChars
+                    )
+                    let estimatedRemainingAudioSeconds = max(estimatedTotalAudioSeconds - generatedAudioSeconds, 0)
+                    let startupTarget = startupBufferTargetSeconds(
+                        generationRate: generationRate,
+                        playbackRate: self.speed,
+                        estimatedRemainingAudioSeconds: estimatedRemainingAudioSeconds
+                    )
+                    let shouldStartPlayback = generatedAudioSeconds >= startupTarget || i == sentences.count - 1
+
+                    log.info("Sentence \(i+1): \(samples.count) samples (\(String(format: "%.2f", chunkAudioSeconds))s), generation \(String(format: "%.2f", generationRate))x audio-time, startup target \(String(format: "%.2f", startupTarget))s")
 
                     await MainActor.run {
                         guard self.generationID == myGenID else { return }
-                        self.progress = Double(i + 1) / Double(sentences.count) * 0.5
+                        self.scheduleStreamingAudio(samples, isFinalChunk: false)
+                        self.progress = min(Double(i + 1) / Double(sentences.count), 0.98)
+
+                        guard shouldStartPlayback, !playbackHasStarted else { return }
+                        playbackHasStarted = true
+                        self.streamingPlaybackStarted = true
+                        self.playerNode?.play()
+                        self.state = .playing
+                        log.info("Streaming playback started after buffering \(String(format: "%.2f", generatedAudioSeconds))s audio; generation rate \(String(format: "%.2f", generationRate))x, playback rate \(String(format: "%.2f", self.speed))x")
                     }
                 }
 
                 if Task.isCancelled { return }
 
-                guard !allSamples.isEmpty else {
-                    await MainActor.run {
-                        guard self.generationID == myGenID else { return }
-                        self.state = .idle
-                        self.currentText = ""
-                        self.progress = 0
-                    }
-                    return
-                }
-
-                let elapsed = CFAbsoluteTimeGetCurrent() - startTime
-                let audioDuration = Double(allSamples.count) / Self.sampleRate
-                let rtf = audioDuration / elapsed
-                log.info("Generation complete: \(allSamples.count) samples, \(String(format: "%.1f", audioDuration))s audio in \(String(format: "%.1f", elapsed))s (\(String(format: "%.1f", rtf))x real-time)")
-
                 await MainActor.run {
                     guard self.generationID == myGenID else { return }
-                    self.playAudio(allSamples)
+                    self.streamingGenerationComplete = true
+                    if !playbackHasStarted {
+                        playbackHasStarted = true
+                        self.streamingPlaybackStarted = true
+                        self.playerNode?.play()
+                        self.state = .playing
+                    }
+                    self.finishPlaybackIfComplete()
                 }
 
             } catch {
@@ -272,6 +313,44 @@ class SpeechEngine: NSObject, ObservableObject {
                 }
             }
         }
+    }
+
+    private func estimateTotalAudioSeconds(
+        generatedAudioSeconds: Double,
+        generatedTextChars: Int,
+        totalTextChars: Int
+    ) -> Double {
+        guard generatedAudioSeconds > 0, generatedTextChars > 0, totalTextChars > 0 else {
+            return generatedAudioSeconds
+        }
+        let audioSecondsPerChar = generatedAudioSeconds / Double(generatedTextChars)
+        return audioSecondsPerChar * Double(totalTextChars)
+    }
+
+    /// Pick the startup buffer that avoids underruns.
+    /// If generation is faster than playback, start quickly. If it is slower, wait
+    /// long enough that the estimated buffer drain is covered before playback begins.
+    private func startupBufferTargetSeconds(
+        generationRate: Double,
+        playbackRate: Double,
+        estimatedRemainingAudioSeconds: Double
+    ) -> Double {
+        let playbackRate = max(playbackRate, 0.1)
+        let lowWaterAudioSeconds = Self.lowWaterWallSeconds * playbackRate
+        guard generationRate > 0 else {
+            return max(lowWaterAudioSeconds, Self.comfortableStartupBufferSeconds)
+        }
+
+        if generationRate >= playbackRate * Self.fastEnoughMargin {
+            return Self.minimumStartupBufferSeconds * playbackRate
+        }
+
+        if generationRate >= playbackRate {
+            return max(lowWaterAudioSeconds, Self.comfortableStartupBufferSeconds * playbackRate)
+        }
+
+        let expectedDrain = ((playbackRate - generationRate) / generationRate) * estimatedRemainingAudioSeconds
+        return max(lowWaterAudioSeconds + expectedDrain, Self.comfortableStartupBufferSeconds * playbackRate)
     }
 
     /// Clean raw text before TTS — strips Slack noise, timestamps, emoji codes, file attachments.
@@ -396,8 +475,7 @@ class SpeechEngine: NSObject, ObservableObject {
         return chunks
     }
 
-    private func playAudio(_ samples: [Float]) {
-        setupAudioEngine()
+    private func scheduleStreamingAudio(_ samples: [Float], isFinalChunk: Bool) {
         guard let player = playerNode, let format = audioFormat else { return }
 
         let frameCount = AVAudioFrameCount(samples.count)
@@ -409,35 +487,34 @@ class SpeechEngine: NSObject, ObservableObject {
             channelData[i] = max(-1.0, min(1.0, samples[i]))
         }
 
-        totalSamplesScheduled = samples.count
+        totalSamplesScheduled += samples.count
+        playbackChunksScheduled += 1
         let expectedGenID = self.generationID
 
         player.scheduleBuffer(buffer) { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
                 guard self.generationID == expectedGenID else { return }
-                self.finishPlayback()
-            }
-        }
-
-        player.play()
-        state = .playing
-        log.info("Playback started (\(samples.count) samples, \(String(format: "%.1f", Double(samples.count) / Self.sampleRate))s)")
-
-        // Track progress
-        Task {
-            while state == .playing || state == .paused {
-                if let player = playerNode, let nodeTime = player.lastRenderTime,
-                   let playerTime = player.playerTime(forNodeTime: nodeTime),
-                   totalSamplesScheduled > 0 {
-                    let currentSample = Double(playerTime.sampleTime)
-                    let total = Double(totalSamplesScheduled)
-                    // Map playback progress to 0.5–1.0 (first 0.5 was generation)
-                    progress = 0.5 + min(currentSample / total, 1.0) * 0.5
+                self.playbackChunksCompleted += 1
+                if !self.streamingGenerationComplete,
+                   self.streamingPlaybackStarted,
+                   self.playbackChunksCompleted >= self.playbackChunksScheduled {
+                    self.state = .generating
+                    log.info("Playback buffer drained before generation finished; waiting for the next chunk")
                 }
-                try? await Task.sleep(nanoseconds: 200_000_000) // 200ms
+                self.finishPlaybackIfComplete()
             }
         }
+        streamingGenerationComplete = streamingGenerationComplete || isFinalChunk
+        if streamingPlaybackStarted,
+           state != .paused,
+           !player.isPlaying,
+           bufferedAudioSeconds() >= resumeBufferTargetSeconds() {
+            player.play()
+            state = .playing
+            log.info("Playback resumed with \(String(format: "%.2f", self.bufferedAudioSeconds()))s buffered")
+        }
+        log.info("Scheduled streaming chunk \(self.playbackChunksScheduled): \(String(format: "%.2f", Double(samples.count) / Self.sampleRate))s audio")
     }
 
     private func setupAudioEngine() {
@@ -458,13 +535,60 @@ class SpeechEngine: NSObject, ObservableObject {
             self.playerNode = player
             self.timePitchNode = timePitch
             self.audioFormat = format
+            self.totalSamplesScheduled = 0
+            self.playbackChunksScheduled = 0
+            self.playbackChunksCompleted = 0
+            self.streamingGenerationComplete = false
+            self.streamingPlaybackStarted = false
             log.info("Audio engine started (speed: \(self.speed)x)")
         } catch {
             log.error("Failed to start audio engine: \(error.localizedDescription)")
         }
     }
 
+    private func startProgressTracker(totalEstimatedAudioSeconds: @escaping @MainActor () -> Double) {
+        progressTask?.cancel()
+        progressTask = Task { @MainActor in
+            while !Task.isCancelled && (state == .generating || state == .playing || state == .paused) {
+                let playedSeconds = currentPlaybackSourceSeconds()
+                let totalSeconds = max(totalEstimatedAudioSeconds(), Double(totalSamplesScheduled) / Self.sampleRate)
+                if totalSeconds > 0 {
+                    progress = min(playedSeconds / totalSeconds, 0.99)
+                }
+                try? await Task.sleep(nanoseconds: 200_000_000)
+            }
+        }
+    }
+
+    private func currentPlaybackSourceSeconds() -> Double {
+        guard let player = playerNode,
+              let nodeTime = player.lastRenderTime,
+              let playerTime = player.playerTime(forNodeTime: nodeTime) else {
+            return 0
+        }
+        return max(Double(playerTime.sampleTime) / Self.sampleRate, 0)
+    }
+
+    private func bufferedAudioSeconds() -> Double {
+        max(Double(totalSamplesScheduled) / Self.sampleRate - currentPlaybackSourceSeconds(), 0)
+    }
+
+    private func resumeBufferTargetSeconds() -> Double {
+        max(Self.minimumStartupBufferSeconds * speed, 0.5)
+    }
+
+    private func finishPlaybackIfComplete() {
+        guard streamingGenerationComplete,
+              playbackChunksScheduled > 0,
+              playbackChunksCompleted >= playbackChunksScheduled else {
+            return
+        }
+        finishPlayback()
+    }
+
     private func finishPlayback() {
+        progressTask?.cancel()
+        progressTask = nil
         progress = 1.0
         state = .idle
         currentText = ""
@@ -473,6 +597,8 @@ class SpeechEngine: NSObject, ObservableObject {
     }
 
     private func stopAudioEngine() {
+        progressTask?.cancel()
+        progressTask = nil
         playerNode?.stop()
         audioEngine?.stop()
         audioEngine = nil
@@ -480,6 +606,10 @@ class SpeechEngine: NSObject, ObservableObject {
         timePitchNode = nil
         audioFormat = nil
         totalSamplesScheduled = 0
+        playbackChunksScheduled = 0
+        playbackChunksCompleted = 0
+        streamingGenerationComplete = false
+        streamingPlaybackStarted = false
     }
 
     func pause() {
