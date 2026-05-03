@@ -1,0 +1,20 @@
+name: Feature request
+description: Suggest a small improvement for Recite.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: Please keep examples short and avoid private text.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What would this help with?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What should Recite do?
+    validations:
+      required: true

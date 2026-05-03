@@ -1,22 +1,44 @@
 # Recite
 
-Recite is a small Mac app that reads selected text aloud with an on-device neural voice.
+![Recite title image](docs/assets/recite-title.png)
 
-Select text in any app, press **Control + Option + R**, and Recite speaks it back. The text stays on your Mac.
+Recite is a small Mac app that gives your computer a local AI voice.
 
-## What It Does
+Think of it like text-to-speech you can run yourself. Select text in any app, press **Control + Option + R**, and Recite reads it back out loud. Articles, docs, emails, notes, long messages - anything you can select.
 
-- Reads selected text from almost any Mac app
-- Runs Kokoro 82M locally through Apple MLX
-- Keeps selected text and generated audio on-device
-- Lives in the menu bar
-- Supports a reading queue, history, voices, and playback speed
+The simple idea: your Mac turns text into speech using its own hardware. No cloud voice API. No per-minute bill. No sending your private reading material to a server.
+
+## What Is Text-To-Speech?
+
+Text-to-speech means software reads written words out loud.
+
+Old text-to-speech sounded robotic. Newer AI voice models can sound much more natural. A lot of tools do this in the cloud with paid services, like ElevenLabs-style voice APIs.
+
+Recite does it locally instead. It downloads a small AI voice model once, then uses your Mac to generate the audio.
+
+## Why Use Recite?
+
+- Read long articles back to you for free.
+- Listen to docs, emails, notes, and web pages while you do something else.
+- Use local AI voices without paying for a cloud voice service.
+- Keep selected text and generated audio on your Mac.
+- Start reading from a global hotkey or the menu bar.
+- Queue text, replay history, choose a voice, and adjust speed.
+
+## How It Works
+
+1. You select text.
+2. Recite grabs that selected text.
+3. A local AI voice model turns the text into audio.
+4. Your Mac plays the audio back.
+
+Recite uses Kokoro 82M for the voice and Apple MLX to run it efficiently on Apple Silicon Macs.
 
 ## Requirements
 
-- macOS 14 or newer
+- macOS 14 Sonoma or newer
 - Apple Silicon Mac
-- Xcode / Swift toolchain
+- Xcode or the Swift toolchain
 - Homebrew `espeak-ng`
 
 ## Quick Start
@@ -30,9 +52,9 @@ swift build
 ./scripts/build-and-run.sh
 ```
 
-On first launch, Recite downloads the Kokoro model from Hugging Face. After that, speech generation runs locally.
+On first launch, Recite downloads the Kokoro voice model from Hugging Face. After that, reading text aloud runs locally on your Mac.
 
-## Using The App
+## Use Recite
 
 1. Launch Recite.
 2. Grant Accessibility permission when macOS asks.
@@ -41,35 +63,55 @@ On first launch, Recite downloads the Kokoro model from Hugging Face. After that
 
 You can also use the menu bar icon to read clipboard text, open the main window, pause playback, or manage the queue.
 
-## How It Works
-
-Recite uses:
-
-- Swift and SwiftUI for the Mac app
-- Accessibility APIs to read selected text
-- A clipboard fallback when selection APIs are not available
-- `mlx-audio-swift` for Kokoro 82M text-to-speech
-- `AVAudioEngine` for local playback and speed control
-
-Main files:
-
-- `AppDelegate.swift` handles launch, menu bar, hotkey, and windows
-- `TextGrabber.swift` captures selected text
-- `SpeechEngine.swift` loads Kokoro and plays generated audio
-- `ReadingQueue.swift` manages queue and history
-- `MenuBarView.swift` contains the SwiftUI interface
-
 ## Privacy
 
-Recite is built to be local-first. It does not send selected text or generated audio to a server.
+Recite is local-first by design.
 
-The model is downloaded from Hugging Face on first launch. Reading history is stored locally in macOS user defaults and can be cleared in the app.
+- Selected text is read from Accessibility APIs or a temporary copy fallback.
+- The copy fallback restores your clipboard after it runs.
+- Recite does not send selected text or generated audio to a server.
+- Reading history is stored locally in macOS user defaults and can be cleared in the app.
+- The Kokoro voice model is downloaded once from Hugging Face on first launch.
+
+Please do not paste private text into GitHub issues.
+
+## Build A Local DMG
+
+```bash
+./scripts/build-dmg.sh
+```
+
+The DMG is written to `.build/dist/Recite-<version>.dmg`. Local builds use ad-hoc signing by default. To use a local signing identity:
+
+```bash
+RECITE_CODESIGN_IDENTITY="Apple Development: Your Name (TEAMID)" ./scripts/build-dmg.sh
+```
+
+## Project Map
+
+```text
+Package.swift                         Swift Package entry point
+scripts/build-and-run.sh              Build, sign, and launch Recite.app
+scripts/build-dmg.sh                  Build a local DMG
+Recite/Sources/Recite/AppDelegate.swift
+                                      Menu bar, hotkey, and app lifecycle
+Recite/Sources/Recite/TextGrabber.swift
+                                      Selected text capture
+Recite/Sources/Recite/SpeechEngine.swift
+                                      Kokoro model loading and audio playback
+Recite/Sources/Recite/ReadingQueue.swift
+                                      Queue and local history
+Recite/Sources/Recite/MenuBarView.swift
+                                      SwiftUI popover, window, and settings
+Recite/Resources/                     App metadata, entitlements, and icons
+docs/assets/                          README art and generated icon source
+```
 
 ## Development
 
-See [SETUP.md](SETUP.md) for a fuller local setup guide.
+See [SETUP.md](SETUP.md) for setup details.
 
-For contribution notes, see [CONTRIBUTING.md](CONTRIBUTING.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 
 ## License
 
