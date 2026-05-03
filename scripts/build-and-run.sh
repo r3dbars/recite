@@ -8,13 +8,33 @@ REQUESTED_IDENTITY="${RECITE_CODESIGN_IDENTITY:-}"
 ENTITLEMENTS="$PROJECT_DIR/Recite/Resources/Recite.entitlements"
 RESOURCES="$PROJECT_DIR/Recite/Resources"
 MLX_METAL_SOURCES="$PROJECT_DIR/.build/checkouts/mlx-swift/Source/Cmlx/mlx-generated/metal"
+LAUNCH_APP=1
+
+for arg in "$@"; do
+  case "$arg" in
+    --no-launch)
+      LAUNCH_APP=0
+      ;;
+    -h|--help)
+      echo "Usage: $0 [--no-launch]"
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $arg" >&2
+      echo "Usage: $0 [--no-launch]" >&2
+      exit 1
+      ;;
+  esac
+done
 
 echo "==> Building..."
 cd "$PROJECT_DIR"
 swift build
 
-echo "==> Stopping existing Recite process..."
-pkill -x Recite 2>/dev/null || true
+if [ "$LAUNCH_APP" -eq 1 ]; then
+  echo "==> Stopping existing Recite process..."
+  pkill -x Recite 2>/dev/null || true
+fi
 
 echo "==> Assembling app bundle..."
 rm -rf "$APP_DIR"
@@ -55,6 +75,10 @@ codesign --force --sign "$SIGN_IDENTITY" --entitlements "$ENTITLEMENTS" --deep "
 echo "==> Verifying signature..."
 codesign -dvvv "$APP_DIR" 2>&1 | grep -E "Identifier|TeamIdentifier|Signature"
 
-echo "==> Launching Recite.app"
-/usr/bin/open -n "$APP_DIR"
-echo "Done. Recite is running."
+if [ "$LAUNCH_APP" -eq 1 ]; then
+  echo "==> Launching Recite.app"
+  /usr/bin/open -n "$APP_DIR"
+  echo "Done. Recite is running."
+else
+  echo "Done. Recite.app is ready at $APP_DIR"
+fi

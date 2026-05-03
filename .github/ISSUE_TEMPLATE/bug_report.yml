@@ -1,0 +1,40 @@
+name: Bug report
+description: Report something that is not working in Recite.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Please do not paste private selected text, clipboard text, or generated audio.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Use placeholder text if the original text was private.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Launch Recite
+        2. Select placeholder text in ...
+        3. Press Control + Option + R
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+      placeholder: macOS 14.5
+  - type: input
+    id: mac
+    attributes:
+      label: Mac model
+      placeholder: MacBook Pro M3
+  - type: input
+    id: recite
+    attributes:
+      label: Recite version or commit
+      placeholder: 0.1.0 or commit SHA

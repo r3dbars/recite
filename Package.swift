@@ -25,6 +25,7 @@ let package = Package(
                 .copy("../../Resources/Info.plist"),
                 .copy("../../Resources/Recite.entitlements"),
                 .copy("../../Resources/AppIcon.icns"),
+                .copy("../../Resources/DMGIcon.icns"),
                 .copy("../../Resources/MenuBarIcon.png"),
                 .copy("../../Resources/MenuBarIcon@2x.png")
             ]

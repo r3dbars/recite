@@ -38,37 +38,20 @@ class TextGrabber: ObservableObject {
         log.info("getSelectedText(fromPID: \(pid ?? 0)) called")
         log.info("AXIsProcessTrusted: \(AXIsProcessTrusted())")
 
-        // Try Accessibility first
         if let pid, let text = getTextViaAccessibility(pid: pid), !text.isEmpty {
             log.info("Got text via accessibility (\(text.count) chars)")
             return text
         }
         log.info("Accessibility returned nothing, falling back to clipboard simulation")
 
-        // Fall back to clipboard simulation
         let clipText = await getTextViaClipboard()
         if let clipText, !clipText.isEmpty {
             log.info("Got text via clipboard (\(clipText.count) chars)")
             return clipText
         }
 
-        // Last resort: read whatever is already on the clipboard
-        // (user may have manually copied before pressing hotkey)
-        let existing = readClipboardText()
-        if let existing, !existing.isEmpty {
-            log.info("Using existing clipboard content (\(existing.count) chars)")
-            return existing
-        }
-
-        log.warning("No text found from any method")
+        log.warning("No selected text found")
         return nil
-    }
-
-    /// Read plain text from the current clipboard contents
-    private func readClipboardText() -> String? {
-        let pasteboard = NSPasteboard.general
-        return pasteboard.string(forType: .string)
-            ?? pasteboard.string(forType: NSPasteboard.PasteboardType("public.utf8-plain-text"))
     }
 
     func requestAccessibilityPermission() {
