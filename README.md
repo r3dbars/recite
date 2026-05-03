@@ -2,17 +2,37 @@
 
 ![Recite title image](docs/assets/recite-title.png)
 
-Recite is a small Mac menu bar app that reads selected text aloud with an on-device neural voice.
+Recite is a small Mac app that gives your computer a local AI voice.
 
-Select text in any app, press **Control + Option + R**, and Recite speaks it back. Your selected text and generated audio stay on your Mac.
+Think of it like text-to-speech you can run yourself. Select text in any app, press **Control + Option + R**, and Recite reads it back out loud. Articles, docs, emails, notes, long messages - anything you can select.
 
-## Why Use It
+The simple idea: your Mac turns text into speech using its own hardware. No cloud voice API. No per-minute bill. No sending your private reading material to a server.
 
-- Read articles, docs, emails, and notes without sending text to a server.
-- Use Kokoro 82M locally through Apple MLX.
-- Start from a global hotkey or the menu bar.
+## What Is Text-To-Speech?
+
+Text-to-speech means software reads written words out loud.
+
+Old text-to-speech sounded robotic. Newer AI voice models can sound much more natural. A lot of tools do this in the cloud with paid services, like ElevenLabs-style voice APIs.
+
+Recite does it locally instead. It downloads a small AI voice model once, then uses your Mac to generate the audio.
+
+## Why Use Recite?
+
+- Read long articles back to you for free.
+- Listen to docs, emails, notes, and web pages while you do something else.
+- Use local AI voices without paying for a cloud voice service.
+- Keep selected text and generated audio on your Mac.
+- Start reading from a global hotkey or the menu bar.
 - Queue text, replay history, choose a voice, and adjust speed.
-- Keep the app simple enough to understand from the source.
+
+## How It Works
+
+1. You select text.
+2. Recite grabs that selected text.
+3. A local AI voice model turns the text into audio.
+4. Your Mac plays the audio back.
+
+Recite uses Kokoro 82M for the voice and Apple MLX to run it efficiently on Apple Silicon Macs.
 
 ## Requirements
 
@@ -32,7 +52,7 @@ swift build
 ./scripts/build-and-run.sh
 ```
 
-On first launch, Recite downloads the Kokoro model from Hugging Face. After the model is cached, text-to-speech generation runs locally.
+On first launch, Recite downloads the Kokoro voice model from Hugging Face. After that, reading text aloud runs locally on your Mac.
 
 ## Use Recite
 
@@ -51,7 +71,7 @@ Recite is local-first by design.
 - The copy fallback restores your clipboard after it runs.
 - Recite does not send selected text or generated audio to a server.
 - Reading history is stored locally in macOS user defaults and can be cleared in the app.
-- The Kokoro model is downloaded once from Hugging Face on first launch.
+- The Kokoro voice model is downloaded once from Hugging Face on first launch.
 
 Please do not paste private text into GitHub issues.
 
