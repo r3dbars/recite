@@ -82,7 +82,7 @@ else
 fi
 
 echo "==> Signing with: $SIGN_IDENTITY"
-codesign --force --sign "$SIGN_IDENTITY" --entitlements "$ENTITLEMENTS" --deep "$APP_DIR"
+codesign --force --sign "$SIGN_IDENTITY" --options runtime --entitlements "$ENTITLEMENTS" --deep "$APP_DIR"
 
 echo "==> Verifying signature..."
 codesign -dvvv "$APP_DIR" 2>&1 | grep -E "Identifier|TeamIdentifier|Signature"

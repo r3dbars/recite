@@ -41,12 +41,17 @@ Recite uses Kokoro 82M for the voice and Apple MLX to run it efficiently on Appl
 - Xcode or the Swift toolchain
 - Homebrew `espeak-ng`
 
+## Download
+
+Download the latest DMG from [GitHub Releases](https://github.com/r3dbars/recite/releases/latest).
+
+Recite is just starting out. If there is not a release yet, use the Quick Start steps below.
+
 ## Quick Start
 
 ```bash
-git clone https://github.com/r3dbars/recite.git
+git clone --recursive https://github.com/r3dbars/recite.git
 cd recite
-git submodule update --init --recursive
 brew install espeak-ng
 swift build
 ./scripts/build-and-run.sh
