@@ -27,7 +27,7 @@ private enum EspeakTextProcessorError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingExecutable:
-            return "espeak-ng was not found. Install it with `brew install espeak-ng`."
+            return "espeak-ng was not found."
         case let .failed(status, stderr):
             if stderr.isEmpty {
                 return "espeak-ng exited with status \(status)."
@@ -46,7 +46,25 @@ struct EspeakTextProcessor: TextProcessor {
     ]
 
     static var installedExecutablePath: String? {
-        executablePaths.first { FileManager.default.isExecutableFile(atPath: $0) }
+        if let bundled = bundledExecutableURL,
+           FileManager.default.isExecutableFile(atPath: bundled.path) {
+            return bundled.path
+        }
+        return executablePaths.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    private static var bundledExecutableURL: URL? {
+        Bundle.main.executableURL?
+            .deletingLastPathComponent()
+            .appendingPathComponent("espeak-ng")
+    }
+
+    private static var bundledDataParentURL: URL? {
+        guard let dataURL = Bundle.main.resourceURL?.appendingPathComponent("espeak-ng-data"),
+              FileManager.default.fileExists(atPath: dataURL.path) else {
+            return nil
+        }
+        return dataURL.deletingLastPathComponent()
     }
 
     func process(text: String, language: String?) throws -> String {
@@ -56,7 +74,13 @@ struct EspeakTextProcessor: TextProcessor {
         }
 
         process.executableURL = URL(fileURLWithPath: executablePath)
-        process.arguments = ["--ipa", "-q", text]
+        var arguments = ["--ipa", "-q"]
+        if executablePath == Self.bundledExecutableURL?.path,
+           let dataParentURL = Self.bundledDataParentURL {
+            arguments.append("--path=\(dataParentURL.path)")
+        }
+        arguments.append(text)
+        process.arguments = arguments
 
         let pipe = Pipe()
         let errorPipe = Pipe()

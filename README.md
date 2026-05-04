@@ -38,8 +38,7 @@ Recite uses Kokoro 82M for the voice and Apple MLX to run it efficiently on Appl
 
 - macOS 14 Sonoma or newer
 - Apple Silicon Mac
-- Xcode or the Swift toolchain
-- Homebrew `espeak-ng`
+- No Homebrew install is needed for the DMG download.
 
 ## Download
 
@@ -56,6 +55,8 @@ brew install espeak-ng
 swift build
 ./scripts/build-and-run.sh
 ```
+
+Source builds use your local Homebrew `espeak-ng` to assemble the app bundle. The downloadable DMG bundles that helper for normal users.
 
 On first launch, Recite downloads the Kokoro voice model from Hugging Face. After that, reading text aloud runs locally on your Mac.
 

@@ -4,11 +4,14 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_DIR="$PROJECT_DIR/.build/debug/Recite.app"
 CONTENTS="$APP_DIR/Contents"
+MACOS="$CONTENTS/MacOS"
+FRAMEWORKS="$CONTENTS/Frameworks"
 REQUESTED_IDENTITY="${RECITE_CODESIGN_IDENTITY:-}"
 DEFAULT_IDENTITY="${RECITE_DEFAULT_CODESIGN_IDENTITY:-9E29C607772DECCED7EC4E3BCBC01DD492548ECE}"
 ENTITLEMENTS="$PROJECT_DIR/Recite/Resources/Recite.entitlements"
 RESOURCES="$PROJECT_DIR/Recite/Resources"
 MLX_METAL_SOURCES="$PROJECT_DIR/.build/checkouts/mlx-swift/Source/Cmlx/mlx-generated/metal"
+ESPEAK_PREFIX="${RECITE_ESPEAK_PREFIX:-}"
 LAUNCH_APP=1
 
 for arg in "$@"; do
@@ -39,12 +42,55 @@ fi
 
 echo "==> Assembling app bundle..."
 rm -rf "$APP_DIR"
-mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
+mkdir -p "$MACOS" "$FRAMEWORKS" "$CONTENTS/Resources"
 
-cp "$PROJECT_DIR/.build/debug/Recite" "$CONTENTS/MacOS/Recite"
+cp "$PROJECT_DIR/.build/debug/Recite" "$MACOS/Recite"
 cp "$RESOURCES/Info.plist" "$CONTENTS/Info.plist"
 cp "$RESOURCES"/AppIcon.icns "$CONTENTS/Resources/" 2>/dev/null || true
 cp "$RESOURCES"/MenuBarIcon*.png "$CONTENTS/Resources/" 2>/dev/null || true
+
+if [ -z "$ESPEAK_PREFIX" ]; then
+  ESPEAK_PREFIX="$(brew --prefix espeak-ng 2>/dev/null || true)"
+fi
+PCAUDIO_PREFIX="$(brew --prefix pcaudiolib 2>/dev/null || true)"
+
+if [ -n "$ESPEAK_PREFIX" ] && [ -x "$ESPEAK_PREFIX/bin/espeak-ng" ]; then
+  echo "==> Bundling espeak-ng..."
+  cp "$ESPEAK_PREFIX/bin/espeak-ng" "$MACOS/espeak-ng"
+  cp "$ESPEAK_PREFIX/lib/libespeak-ng.1.dylib" "$FRAMEWORKS/libespeak-ng.1.dylib"
+  if [ -n "$PCAUDIO_PREFIX" ] && [ -f "$PCAUDIO_PREFIX/lib/libpcaudio.0.dylib" ]; then
+    cp "$PCAUDIO_PREFIX/lib/libpcaudio.0.dylib" "$FRAMEWORKS/libpcaudio.0.dylib"
+  fi
+  cp -R "$ESPEAK_PREFIX/share/espeak-ng-data" "$CONTENTS/Resources/espeak-ng-data"
+  mkdir -p "$CONTENTS/Resources/ThirdParty/espeak-ng" "$CONTENTS/Resources/ThirdParty/pcaudiolib"
+  cp "$PROJECT_DIR/THIRD_PARTY_NOTICES.md" "$CONTENTS/Resources/ThirdParty/" 2>/dev/null || true
+  cp "$ESPEAK_PREFIX"/COPYING* "$CONTENTS/Resources/ThirdParty/espeak-ng/" 2>/dev/null || true
+  cp "$ESPEAK_PREFIX"/README.md "$CONTENTS/Resources/ThirdParty/espeak-ng/" 2>/dev/null || true
+  if [ -n "$PCAUDIO_PREFIX" ]; then
+    cp "$PCAUDIO_PREFIX"/COPYING "$CONTENTS/Resources/ThirdParty/pcaudiolib/" 2>/dev/null || true
+    cp "$PCAUDIO_PREFIX"/README* "$CONTENTS/Resources/ThirdParty/pcaudiolib/" 2>/dev/null || true
+  fi
+
+  ESPEAK_LIB_REF="$(otool -L "$MACOS/espeak-ng" | awk '/libespeak-ng\.1\.dylib/ { print $1; exit }')"
+  PCAUDIO_LIB_REF_IN_HELPER="$(otool -L "$MACOS/espeak-ng" | awk '/libpcaudio\.0\.dylib/ { print $1; exit }')"
+  PCAUDIO_LIB_REF_IN_ESPEAK="$(otool -L "$FRAMEWORKS/libespeak-ng.1.dylib" | awk '/libpcaudio\.0\.dylib/ { print $1; exit }')"
+
+  install_name_tool \
+    -change "$ESPEAK_LIB_REF" "@executable_path/../Frameworks/libespeak-ng.1.dylib" \
+    -change "$PCAUDIO_LIB_REF_IN_HELPER" "@executable_path/../Frameworks/libpcaudio.0.dylib" \
+    "$MACOS/espeak-ng"
+
+  install_name_tool \
+    -id "@executable_path/../Frameworks/libespeak-ng.1.dylib" \
+    -change "$PCAUDIO_LIB_REF_IN_ESPEAK" "@loader_path/libpcaudio.0.dylib" \
+    "$FRAMEWORKS/libespeak-ng.1.dylib"
+
+  if [ -f "$FRAMEWORKS/libpcaudio.0.dylib" ]; then
+    install_name_tool -id "@rpath/libpcaudio.0.dylib" "$FRAMEWORKS/libpcaudio.0.dylib"
+  fi
+else
+  echo "==> espeak-ng not found locally; app will use a system Homebrew install if available."
+fi
 
 if [ -d "$MLX_METAL_SOURCES" ]; then
   echo "==> Compiling MLX Metal kernels..."
@@ -57,7 +103,7 @@ if [ -d "$MLX_METAL_SOURCES" ]; then
     AIR_FILES+=("$air")
   done < <(find "$MLX_METAL_SOURCES" -name '*.metal' -print0)
   if [ "${#AIR_FILES[@]}" -gt 0 ]; then
-    xcrun -sdk macosx metallib "${AIR_FILES[@]}" -o "$CONTENTS/MacOS/mlx.metallib"
+    xcrun -sdk macosx metallib "${AIR_FILES[@]}" -o "$MACOS/mlx.metallib"
   else
     echo "==> No MLX Metal kernels found."
   fi
@@ -82,6 +128,15 @@ else
 fi
 
 echo "==> Signing with: $SIGN_IDENTITY"
+if [ -f "$FRAMEWORKS/libpcaudio.0.dylib" ]; then
+  codesign --force --sign "$SIGN_IDENTITY" --options runtime "$FRAMEWORKS/libpcaudio.0.dylib"
+fi
+if [ -f "$FRAMEWORKS/libespeak-ng.1.dylib" ]; then
+  codesign --force --sign "$SIGN_IDENTITY" --options runtime "$FRAMEWORKS/libespeak-ng.1.dylib"
+fi
+if [ -x "$MACOS/espeak-ng" ]; then
+  codesign --force --sign "$SIGN_IDENTITY" --options runtime "$MACOS/espeak-ng"
+fi
 codesign --force --sign "$SIGN_IDENTITY" --options runtime --entitlements "$ENTITLEMENTS" --deep "$APP_DIR"
 
 echo "==> Verifying signature..."
