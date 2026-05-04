@@ -53,6 +53,15 @@ struct EspeakTextProcessor: TextProcessor {
         return executablePaths.first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
+    static var isUsingBundledRuntime: Bool {
+        guard let bundledPath = bundledExecutableURL?.path,
+              installedExecutablePath == bundledPath,
+              bundledDataParentURL != nil else {
+            return false
+        }
+        return true
+    }
+
     private static var bundledExecutableURL: URL? {
         Bundle.main.executableURL?
             .deletingLastPathComponent()
