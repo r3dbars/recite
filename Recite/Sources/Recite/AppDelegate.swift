@@ -4,6 +4,7 @@ import Combine
 import os.log
 
 private let log = Logger(subsystem: "com.r3dbars.recite", category: "AppDelegate")
+private let didShowFirstLaunchWindowKey = "didShowFirstLaunchWindow"
 
 @MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
@@ -29,6 +30,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         requestAccessibilityAndSetupHotKey()
         subscribeToEngine()
         trackFrontmostApp()
+        showMainWindowOnFirstLaunch()
 
         // Load Kokoro TTS model in background
         Task {
@@ -151,6 +153,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.contentViewController = NSHostingController(rootView: ReciteWindowView())
         mainWindow = window
         window.makeKeyAndOrderFront(nil)
+    }
+
+    private func showMainWindowOnFirstLaunch() {
+        guard !UserDefaults.standard.bool(forKey: didShowFirstLaunchWindowKey) else {
+            return
+        }
+        UserDefaults.standard.set(true, forKey: didShowFirstLaunchWindowKey)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            let hasVisibleWindow = NSApp.windows.contains { window in
+                window.isVisible && !window.isMiniaturized
+            }
+            if !hasVisibleWindow {
+                self?.showMainWindow()
+            }
+        }
     }
 
     @objc private func handleStatusItemClick(_ sender: NSStatusBarButton) {

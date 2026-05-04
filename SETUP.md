@@ -76,7 +76,7 @@ git submodule update --init --recursive
 
 - Confirm you are on Apple Silicon.
 - Confirm first launch has internet access for the model download.
-- Confirm `espeak-ng` is installed with `brew install espeak-ng`.
+- If you are building from source, confirm `espeak-ng` is installed with `brew install espeak-ng`.
 
 ### Hotkey does not work
 

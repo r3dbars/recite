@@ -8,6 +8,8 @@ Think of it like text-to-speech you can run yourself. Select text in any app, pr
 
 The simple idea: your Mac turns text into speech using its own hardware. No cloud voice API. No per-minute bill. No sending your private reading material to a server.
 
+![Recite app window showing local text-to-speech controls](docs/assets/recite-screenshot.png)
+
 ## What Is Text-To-Speech?
 
 Text-to-speech means software reads written words out loud.
@@ -121,4 +123,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 
 ## License
 
-MIT
+Recite source code is MIT licensed.
+
+Release builds also include or download third-party components with their own licenses. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

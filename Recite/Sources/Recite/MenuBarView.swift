@@ -484,9 +484,8 @@ struct PlayerDetailView: View {
                     ReadyCheckRow(
                         icon: "terminal",
                         label: "espeak-ng",
-                        detail: "Text preprocessing — brew install espeak-ng",
-                        status: EspeakTextProcessor.installedExecutablePath != nil
-                            ? .ready("Ready") : .warning("Not installed")
+                        detail: espeakReadyDetail,
+                        status: espeakReadyStatus
                     )
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -518,6 +517,23 @@ struct PlayerDetailView: View {
         case .error(let msg):       return .error(String(msg.prefix(30)))
         case .notLoaded:            return .warning("Not loaded")
         }
+    }
+
+    private var espeakReadyDetail: String {
+        if EspeakTextProcessor.isUsingBundledRuntime {
+            return "Text helper bundled with Recite"
+        }
+        return "Text helper for source builds"
+    }
+
+    private var espeakReadyStatus: ReadyCheckRow.Status {
+        if EspeakTextProcessor.isUsingBundledRuntime {
+            return .ready("Bundled")
+        }
+        if EspeakTextProcessor.installedExecutablePath != nil {
+            return .ready("Installed")
+        }
+        return .warning("Missing for source build")
     }
 
     private var playIcon: String {
@@ -893,6 +909,16 @@ struct ShortcutRow: View {
 // MARK: - About Detail
 
 struct AboutDetailView: View {
+    private var espeakRequirementText: String {
+        if EspeakTextProcessor.isUsingBundledRuntime {
+            return "espeak-ng bundled with Recite"
+        }
+        if EspeakTextProcessor.installedExecutablePath != nil {
+            return "espeak-ng installed locally"
+        }
+        return "espeak-ng needed for source builds"
+    }
+
     var body: some View {
         ScrollView {
             VStack(spacing: 0) {
@@ -916,7 +942,7 @@ struct AboutDetailView: View {
                 // What it does
                 VStack(alignment: .leading, spacing: 20) {
                     AboutSection(title: "What Recite Does") {
-                        Text("Recite reads any text aloud using Kokoro 82M, a fast neural text-to-speech model that runs entirely on your Mac — no internet, no cloud, no subscriptions. Select text in any app, press ⌃⌥R, and Recite speaks it back to you.")
+                        Text("Recite reads any text aloud using Kokoro 82M, a fast neural text-to-speech model that runs on your Mac after its first download. No cloud voice API. No subscriptions. Select text in any app, press ⌃⌥R, and Recite speaks it back to you.")
                             .font(.system(size: 13))
                             .foregroundColor(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -951,7 +977,7 @@ struct AboutDetailView: View {
                             AboutRequirement(met: true, text: "macOS 14 Sonoma or later")
                             AboutRequirement(
                                 met: EspeakTextProcessor.installedExecutablePath != nil,
-                                text: "espeak-ng  —  brew install espeak-ng"
+                                text: espeakRequirementText
                             )
                         }
                     }
