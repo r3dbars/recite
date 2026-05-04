@@ -1,4 +1,3 @@
 [submodule "local-deps/mlx-audio-swift"]
 	path = local-deps/mlx-audio-swift
 	url = https://github.com/r3dbars/mlx-audio-swift.git
-	branch = codex/recite-tts-manifest-fix

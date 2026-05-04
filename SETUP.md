@@ -3,7 +3,8 @@
 Recite is a Swift Package macOS app. The fastest path is:
 
 ```bash
-git submodule update --init --recursive
+git clone --recursive https://github.com/r3dbars/recite.git
+cd recite
 brew install espeak-ng
 swift build
 ./scripts/build-and-run.sh
