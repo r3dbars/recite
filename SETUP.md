@@ -15,8 +15,10 @@ swift build
 - macOS 14 Sonoma or newer
 - Apple Silicon Mac
 - Xcode or the Swift toolchain
-- Homebrew
-- `espeak-ng`
+- Homebrew for source builds
+- `espeak-ng` for assembling a local app bundle from source
+
+People who install the DMG do not need Homebrew or a separate `espeak-ng` install.
 
 ## First Launch
 
