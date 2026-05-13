@@ -44,7 +44,7 @@ class TextGrabber: ObservableObject {
         }
         log.info("Accessibility returned nothing, falling back to clipboard simulation")
 
-        let clipText = await getTextViaClipboard()
+        let clipText = await getTextViaClipboard(pid: pid)
         if let clipText, !clipText.isEmpty {
             log.info("Got text via clipboard (\(clipText.count) chars)")
             return clipText
@@ -108,9 +108,9 @@ class TextGrabber: ObservableObject {
 
     // MARK: - Clipboard Simulation
 
-    private func getTextViaClipboard() async -> String? {
+    private func getTextViaClipboard(pid: pid_t?) async -> String? {
         let pasteboard = NSPasteboard.general
-        log.info("Starting clipboard simulation")
+        log.info("Starting clipboard simulation for pid \(pid ?? 0)")
 
         let savedItems = pasteboard.pasteboardItems?.map(ClipboardItemSnapshot.init) ?? []
         log.info("Saved clipboard items=\(savedItems.count)")
@@ -125,15 +125,24 @@ class TextGrabber: ObservableObject {
         let src = CGEventSource(stateID: .hidSystemState)
         log.info("CGEventSource created: \(src != nil)")
 
+        func post(_ event: CGEvent?) {
+            guard let event else { return }
+            if let pid, pid > 0 {
+                event.postToPid(pid)
+            } else {
+                event.post(tap: .cghidEventTap)
+            }
+        }
+
         // Key code 8 = C
         let cDown = CGEvent(keyboardEventSource: src, virtualKey: 0x08, keyDown: true)
         cDown?.flags = .maskCommand
-        cDown?.post(tap: .cghidEventTap)
+        post(cDown)
         log.info("Posted ⌘C keyDown")
 
         let cUp = CGEvent(keyboardEventSource: src, virtualKey: 0x08, keyDown: false)
         cUp?.flags = .maskCommand
-        cUp?.post(tap: .cghidEventTap)
+        post(cUp)
         log.info("Posted ⌘C keyUp")
 
         // Give the source app a moment to process the ⌘C

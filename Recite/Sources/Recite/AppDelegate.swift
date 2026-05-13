@@ -1,16 +1,57 @@
 import AppKit
 import SwiftUI
 import Combine
+import ApplicationServices
+import Carbon.HIToolbox
 import os.log
 
 private let log = Logger(subsystem: "com.r3dbars.recite", category: "AppDelegate")
 private let didShowFirstLaunchWindowKey = "didShowFirstLaunchWindow"
+private let reciteHotKeySignature: OSType = 0x52435445
+
+private func sourcePIDFromFrontmostApp() -> pid_t? {
+    let frontmost = NSWorkspace.shared.frontmostApplication
+    if frontmost?.bundleIdentifier == Bundle.main.bundleIdentifier {
+        return nil
+    }
+    return frontmost?.processIdentifier
+}
+
+private func selectedTextFromFocusedElement(pid: pid_t) -> String? {
+    guard AXIsProcessTrusted() else { return nil }
+
+    let axApp = AXUIElementCreateApplication(pid)
+    var focusedElement: AnyObject?
+    let focusResult = AXUIElementCopyAttributeValue(
+        axApp,
+        kAXFocusedUIElementAttribute as CFString,
+        &focusedElement
+    )
+    guard focusResult == .success, let element = focusedElement else {
+        return nil
+    }
+    guard CFGetTypeID(element) == AXUIElementGetTypeID() else {
+        return nil
+    }
+
+    var selectedText: AnyObject?
+    let selectedResult = AXUIElementCopyAttributeValue(
+        element as! AXUIElement,
+        kAXSelectedTextAttribute as CFString,
+        &selectedText
+    )
+    guard selectedResult == .success else {
+        return nil
+    }
+    return selectedText as? String
+}
 
 @MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
-    private var eventMonitor: Any?
+    private var carbonHotKeyRef: EventHotKeyRef?
+    private var carbonEventHandlerRef: EventHandlerRef?
     private var localEventMonitor: Any?
     private var workspaceObserver: Any?
     private var mainWindow: NSWindow?
@@ -42,8 +83,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         Task { @MainActor in
             engine.stop()
         }
-        if let monitor = eventMonitor {
-            NSEvent.removeMonitor(monitor)
+        if let ref = carbonHotKeyRef {
+            UnregisterEventHotKey(ref)
+        }
+        if let handler = carbonEventHandlerRef {
+            RemoveEventHandler(handler)
         }
         if let monitor = localEventMonitor {
             NSEvent.removeMonitor(monitor)
@@ -224,41 +268,98 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func requestAccessibilityAndSetupHotKey() {
         grabber.requestAccessibilityPermission()
-        // Register hotkey immediately — local monitor works without Accessibility.
-        // Global monitor (other-app events) requires Accessibility but we register
-        // it now too; macOS will silently drop events until permission is granted.
         setupGlobalHotKey()
     }
 
     private func setupGlobalHotKey() {
-        guard eventMonitor == nil else { return }
+        guard carbonHotKeyRef == nil else { return }
 
-        let handler: (NSEvent) -> Bool = { [weak self] event in
-            // Mask to device-independent flags only — macOS injects extra bits
-            // (.numericPad, .function, etc.) that break a naive .contains() check.
-            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            guard event.keyCode == 15, flags == [.control, .option] else { return false }
-            log.info("⌃⌥R pressed — hotkey triggered (keyCode=\(event.keyCode))")
-            let frontmostApp = NSWorkspace.shared.frontmostApplication
-            let sourcePID = frontmostApp?.bundleIdentifier == Bundle.main.bundleIdentifier
-                ? nil
-                : frontmostApp?.processIdentifier
-            log.info("Source app PID: \(sourcePID ?? 0)")
-            Task { @MainActor in
-                self?.readSelection(sourcePID: sourcePID)
-            }
-            return true
+        var eventType = EventTypeSpec(
+            eventClass: OSType(kEventClassKeyboard),
+            eventKind: UInt32(kEventHotKeyPressed)
+        )
+        let handlerStatus = InstallEventHandler(
+            GetApplicationEventTarget(),
+            { _, event, userData -> OSStatus in
+                guard let event, let userData else {
+                    return OSStatus(eventNotHandledErr)
+                }
+
+                var hotKeyID = EventHotKeyID()
+                GetEventParameter(
+                    event,
+                    EventParamName(kEventParamDirectObject),
+                    EventParamType(typeEventHotKeyID),
+                    nil,
+                    MemoryLayout<EventHotKeyID>.size,
+                    nil,
+                    &hotKeyID
+                )
+                guard hotKeyID.signature == reciteHotKeySignature, hotKeyID.id == 1 else {
+                    return OSStatus(eventNotHandledErr)
+                }
+
+                let delegate = Unmanaged<AppDelegate>.fromOpaque(userData).takeUnretainedValue()
+                let sourcePID = sourcePIDFromFrontmostApp()
+                let axText = sourcePID.flatMap(selectedTextFromFocusedElement(pid:))
+
+                Task { @MainActor in
+                    delegate.hotkeyFired(sourcePID: sourcePID, axText: axText)
+                }
+                return noErr
+            },
+            1,
+            &eventType,
+            Unmanaged.passUnretained(self).toOpaque(),
+            &carbonEventHandlerRef
+        )
+        guard handlerStatus == noErr else {
+            log.error("Failed to install Carbon hotkey handler: \(handlerStatus)")
+            return
         }
 
-        // Global monitor fires when another app is active (requires Accessibility).
-        eventMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
-            _ = handler(event)
+        let hotKeyID = EventHotKeyID(signature: reciteHotKeySignature, id: 1)
+        let registerStatus = RegisterEventHotKey(
+            UInt32(kVK_ANSI_R),
+            UInt32(controlKey | optionKey),
+            hotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &carbonHotKeyRef
+        )
+        guard registerStatus == noErr else {
+            log.error("Failed to register Carbon hotkey: \(registerStatus)")
+            return
         }
-        // Local monitor fires when Recite itself is active.
+
         localEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            handler(event) ? nil : event
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            guard event.keyCode == 15, flags == [.control, .option] else {
+                return event
+            }
+            Task { @MainActor in
+                self.hotkeyFired(sourcePID: self.lastExternalApp?.processIdentifier, axText: nil)
+            }
+            return nil
         }
-        log.info("Global hotkey registered (eventMonitor=\(self.eventMonitor != nil))")
+        log.info("Carbon hotkey registered: ⌃⌥R")
+    }
+
+    @MainActor
+    private func hotkeyFired(sourcePID: pid_t?, axText: String?) {
+        let trimmedAXText = axText?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !trimmedAXText.isEmpty {
+            log.info("Hotkey used synchronous AX text (\(trimmedAXText.count) chars)")
+            showPopover()
+            let item = queue.add(text: trimmedAXText, source: "Selection")
+            if engine.state == .idle {
+                queue.play(item: item)
+            }
+            return
+        }
+
+        log.info("Hotkey falling back to clipboard simulation for pid \(sourcePID ?? 0)")
+        readSelection(sourcePID: sourcePID)
     }
 
     private func showPopover() {
