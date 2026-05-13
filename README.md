@@ -36,6 +36,28 @@ Recite does it locally instead. It downloads a small AI voice model once, then u
 
 Recite uses Kokoro 82M for the voice and Apple MLX to run it efficiently on Apple Silicon Macs.
 
+## Model And Voices
+
+Recite uses [Kokoro-82M-bf16](https://huggingface.co/mlx-community/Kokoro-82M-bf16), an MLX conversion of [hexgrad/Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M). The model is about 355 MB, downloads once on first launch, and runs on your Mac.
+
+Recite includes 13 English voice presets:
+
+| Name | Voice ID | Accent |
+| --- | --- | --- |
+| Heart | `af_heart` | American female |
+| Bella | `af_bella` | American female |
+| Sky | `af_sky` | American female |
+| Nicole | `af_nicole` | American female |
+| Sarah | `af_sarah` | American female |
+| Nova | `af_nova` | American female |
+| River | `af_river` | American female |
+| Adam | `am_adam` | American male |
+| Michael | `am_michael` | American male |
+| Eric | `am_eric` | American male |
+| Liam | `am_liam` | American male |
+| Alice | `bf_alice` | British female |
+| Daniel | `bm_daniel` | British male |
+
 ## Requirements
 
 - macOS 14 Sonoma or newer
