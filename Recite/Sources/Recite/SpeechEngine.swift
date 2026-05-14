@@ -112,8 +112,14 @@ struct VoicePreset: Identifiable, Hashable {
     }
 
     var bundledSampleName: String? {
-        guard modelFamily == .chatterbox else { return nil }
-        return "chatterbox_\(voiceID)"
+        switch modelFamily {
+        case .kokoro:
+            return nil
+        case .qwen:
+            return "qwen_\(voiceID)"
+        case .chatterbox:
+            return "chatterbox_\(voiceID)"
+        }
     }
 
     static let defaultPreset = VoicePreset(
@@ -312,10 +318,8 @@ class SpeechEngine: NSObject, ObservableObject {
     private var previewPlayerNode: AVAudioPlayerNode?
     private var previewFilePlayer: AVAudioPlayer?
     private var previewFileTask: Task<Void, Never>?
-    private var sampleModels: [VoiceModelFamily: any SpeechGenerationModel] = [:]
 
     private static let modelID = "mlx-community/Kokoro-82M-bf16"
-    private static let qwenSampleModelID = "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"
     private static let sampleRate: Double = 24000
     private static let fastEnoughMargin = 1.15
     private static let minimumStartupBufferSeconds = 1.25
@@ -369,7 +373,7 @@ class SpeechEngine: NSObject, ObservableObject {
         if preset.modelFamily == .kokoro {
             return modelStatus == .ready
         }
-        return preset.modelFamily == .qwen
+        return false
     }
 
     private static func savedVoiceModel() -> VoiceModelFamily {
@@ -547,15 +551,7 @@ class SpeechEngine: NSObject, ObservableObject {
             }
             return model
         case .qwen:
-            if let sampleModel = sampleModels[.qwen] {
-                return sampleModel
-            }
-            let sampleModel = try await TTS.loadModel(
-                modelRepo: Self.qwenSampleModelID,
-                modelType: "qwen3_tts"
-            )
-            sampleModels[.qwen] = sampleModel
-            return sampleModel
+            throw AudioGenerationError.invalidInput("Qwen samples are bundled audio files.")
         case .chatterbox:
             throw AudioGenerationError.invalidInput("Chatterbox samples need a Chatterbox runtime and reference audio.")
         }
