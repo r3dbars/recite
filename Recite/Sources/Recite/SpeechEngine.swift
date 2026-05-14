@@ -191,6 +191,9 @@ class SpeechEngine: NSObject, ObservableObject {
     private var playbackChunksCompleted = 0
     private var streamingGenerationComplete = false
     private var streamingPlaybackStarted = false
+    private var accumulatedSamples: [Float] = []
+    private var seekSampleOffset: Int = 0
+    private var playbackID: UInt64 = 0
     private var progressTask: Task<Void, Never>?
     private var previewTask: Task<Void, Never>?
     private var previewAudioEngine: AVAudioEngine?
@@ -738,14 +741,17 @@ class SpeechEngine: NSObject, ObservableObject {
             channelData[i] = max(-1.0, min(1.0, samples[i]))
         }
 
+        accumulatedSamples.append(contentsOf: samples)
         totalSamplesScheduled += samples.count
         playbackChunksScheduled += 1
         let expectedGenID = self.generationID
+        let expectedPlaybackID = self.playbackID
 
         player.scheduleBuffer(buffer) { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
                 guard self.generationID == expectedGenID else { return }
+                guard self.playbackID == expectedPlaybackID else { return }
                 self.playbackChunksCompleted += 1
                 if !self.streamingGenerationComplete,
                    self.streamingPlaybackStarted,
@@ -791,6 +797,8 @@ class SpeechEngine: NSObject, ObservableObject {
             self.playbackChunksCompleted = 0
             self.streamingGenerationComplete = false
             self.streamingPlaybackStarted = false
+            self.accumulatedSamples = []
+            self.seekSampleOffset = 0
             log.info("Audio engine started (speed: \(self.speed)x)")
             return true
         } catch {
@@ -803,7 +811,7 @@ class SpeechEngine: NSObject, ObservableObject {
         progressTask?.cancel()
         progressTask = Task { @MainActor in
             while !Task.isCancelled && (state == .generating || state == .playing || state == .paused) {
-                let playedSeconds = currentPlaybackSourceSeconds()
+                let playedSeconds = Double(seekSampleOffset) / Self.sampleRate + currentPlaybackSourceSeconds()
                 let totalSeconds = max(totalEstimatedAudioSeconds(), Double(totalSamplesScheduled) / Self.sampleRate)
                 if totalSeconds > 0 {
                     progress = min(playedSeconds / totalSeconds, 0.99)
@@ -863,6 +871,8 @@ class SpeechEngine: NSObject, ObservableObject {
         playbackChunksCompleted = 0
         streamingGenerationComplete = false
         streamingPlaybackStarted = false
+        accumulatedSamples = []
+        seekSampleOffset = 0
     }
 
     func pause() {
@@ -899,6 +909,57 @@ class SpeechEngine: NSObject, ObservableObject {
     func playNext() {
         stop()
         ReadingQueue.shared.playNext()
+    }
+
+    func skipBackward(_ seconds: Double = 15) {
+        guard state == .playing || state == .paused, !accumulatedSamples.isEmpty else { return }
+        let currentSample = seekSampleOffset + Int(currentPlaybackSourceSeconds() * Self.sampleRate)
+        seekTo(sample: max(0, currentSample - Int(seconds * Self.sampleRate)))
+    }
+
+    func skipForward(_ seconds: Double = 15) {
+        guard state == .playing || state == .paused, !accumulatedSamples.isEmpty else { return }
+        let currentSample = seekSampleOffset + Int(currentPlaybackSourceSeconds() * Self.sampleRate)
+        let target = min(currentSample + Int(seconds * Self.sampleRate), accumulatedSamples.count - 1)
+        guard target > currentSample else { return }
+        seekTo(sample: target)
+    }
+
+    private func seekTo(sample: Int) {
+        guard let player = playerNode, let format = audioFormat else { return }
+        let clamped = max(0, min(sample, accumulatedSamples.count - 1))
+        let wasPlaying = state == .playing
+
+        playbackID &+= 1
+        player.stop()
+
+        seekSampleOffset = clamped
+        streamingGenerationComplete = true
+
+        let remainingCount = accumulatedSamples.count - clamped
+        guard remainingCount > 0 else { return }
+
+        let frameCount = AVAudioFrameCount(remainingCount)
+        guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else { return }
+        buffer.frameLength = frameCount
+        guard let channelData = buffer.floatChannelData?[0] else { return }
+        accumulatedSamples.withUnsafeBufferPointer { ptr in
+            guard let base = ptr.baseAddress else { return }
+            memcpy(channelData, base.advanced(by: clamped), remainingCount * MemoryLayout<Float>.stride)
+        }
+
+        let expectedGenID = generationID
+        let expectedPlaybackID = playbackID
+        player.scheduleBuffer(buffer) { [weak self] in
+            Task { @MainActor in
+                guard let self else { return }
+                guard self.generationID == expectedGenID else { return }
+                guard self.playbackID == expectedPlaybackID else { return }
+                self.finishPlayback()
+            }
+        }
+
+        if wasPlaying { player.play() }
     }
 
     func updateSpeed(_ newSpeed: Double) {

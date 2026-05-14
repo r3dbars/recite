@@ -138,6 +138,11 @@ if [ -x "$MACOS/espeak-ng" ]; then
   codesign --force --sign "$SIGN_IDENTITY" --options runtime "$MACOS/espeak-ng"
 fi
 codesign --force --sign "$SIGN_IDENTITY" --options runtime --entitlements "$ENTITLEMENTS" --deep "$APP_DIR"
+# Re-sign espeak-ng without Hardened Runtime so Library Validation doesn't block dylib
+# loading on macOS 26 with ad-hoc signing (Team ID mismatch). Must happen after --deep.
+if [ -x "$MACOS/espeak-ng" ]; then
+  codesign --force --sign "$SIGN_IDENTITY" "$MACOS/espeak-ng"
+fi
 
 echo "==> Verifying signature..."
 codesign -dvvv "$APP_DIR" 2>&1 | grep -E "Identifier|TeamIdentifier|Signature"

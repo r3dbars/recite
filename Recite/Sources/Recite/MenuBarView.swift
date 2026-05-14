@@ -366,15 +366,13 @@ struct PlayerDetailView: View {
 
                 Spacer()
 
-                Button {
-                    if let item = queue.currentItem { queue.play(item: item) }
-                } label: {
-                    Image(systemName: "backward.fill")
+                Button { engine.skipBackward() } label: {
+                    Image(systemName: "gobackward.15")
                         .font(.system(size: 14))
                         .foregroundColor(.secondary)
                 }
                 .buttonStyle(.plain)
-                .disabled(engine.state == .generating)
+                .disabled(engine.state != .playing && engine.state != .paused)
 
                 if engine.state == .generating {
                     Button { engine.stop() } label: {
@@ -393,12 +391,13 @@ struct PlayerDetailView: View {
                     .disabled(engine.modelStatus != .ready)
                 }
 
-                Button { engine.playNext() } label: {
-                    Image(systemName: "forward.fill")
+                Button { engine.skipForward() } label: {
+                    Image(systemName: "goforward.15")
                         .font(.system(size: 14))
                         .foregroundColor(.secondary)
                 }
                 .buttonStyle(.plain)
+                .disabled(engine.state != .playing && engine.state != .paused)
 
                 Spacer()
 
