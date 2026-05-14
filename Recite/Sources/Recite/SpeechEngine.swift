@@ -8,15 +8,49 @@ import os.log
 
 private let log = Logger(subsystem: "com.r3dbars.recite", category: "SpeechEngine")
 
+enum VoiceModelFamily: String, CaseIterable, Identifiable {
+    case kokoro
+    case qwen
+    case chatterbox
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .kokoro: return "Kokoro"
+        case .qwen: return "Qwen"
+        case .chatterbox: return "Chatterbox"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .kokoro: return "MLX Kokoro 82M"
+        case .qwen: return "Qwen voice presets"
+        case .chatterbox: return "Chatterbox reference voices"
+        }
+    }
+
+    var supportsLocalPlayback: Bool {
+        self == .kokoro
+    }
+}
+
 struct VoicePreset: Identifiable, Hashable {
     let name: String
-    let kokoroVoice: String
+    let voiceID: String
+    let modelFamily: VoiceModelFamily
+    let detail: String
 
-    var id: String { kokoroVoice }
+    var id: String { "\(modelFamily.rawValue):\(voiceID)" }
+
+    var kokoroVoice: String { voiceID }
 
     static let defaultPreset = VoicePreset(
         name: "Heart",
-        kokoroVoice: "af_heart"
+        voiceID: "af_heart",
+        modelFamily: .kokoro,
+        detail: "American English · af_heart"
     )
 }
 
@@ -146,33 +180,41 @@ class SpeechEngine: NSObject, ObservableObject {
         }
     }
     @Published var previewingVoice: String?
-    @Published var selectedVoice: String = UserDefaults.standard.string(forKey: "selectedVoice")
-        ?? VoicePreset.defaultPreset.kokoroVoice {
-        didSet {
-            log.info("Voice changed to: \(self.selectedVoice)")
-            UserDefaults.standard.set(selectedVoice, forKey: "selectedVoice")
-            guard state == .playing || state == .paused || state == .generating else { return }
-            let textToRepeat = currentText.isEmpty ? ReadingQueue.shared.currentItem?.text : currentText
-            if let text = textToRepeat {
-                speak(text)
-            }
-        }
-    }
+    @Published private(set) var selectedVoiceModel: VoiceModelFamily = SpeechEngine.savedVoiceModel()
+    @Published private(set) var selectedVoice: String = SpeechEngine.savedVoiceID(for: SpeechEngine.savedVoiceModel())
 
     static let voicePresets: [VoicePreset] = [
-        VoicePreset(name: "Heart", kokoroVoice: "af_heart"),
-        VoicePreset(name: "Bella", kokoroVoice: "af_bella"),
-        VoicePreset(name: "Sky", kokoroVoice: "af_sky"),
-        VoicePreset(name: "Nicole", kokoroVoice: "af_nicole"),
-        VoicePreset(name: "Sarah", kokoroVoice: "af_sarah"),
-        VoicePreset(name: "Nova", kokoroVoice: "af_nova"),
-        VoicePreset(name: "River", kokoroVoice: "af_river"),
-        VoicePreset(name: "Adam", kokoroVoice: "am_adam"),
-        VoicePreset(name: "Michael", kokoroVoice: "am_michael"),
-        VoicePreset(name: "Eric", kokoroVoice: "am_eric"),
-        VoicePreset(name: "Liam", kokoroVoice: "am_liam"),
-        VoicePreset(name: "Alice (British)", kokoroVoice: "bf_alice"),
-        VoicePreset(name: "Daniel (British)", kokoroVoice: "bm_daniel"),
+        VoicePreset(name: "Heart", voiceID: "af_heart", modelFamily: .kokoro, detail: "American English · af_heart"),
+        VoicePreset(name: "Bella", voiceID: "af_bella", modelFamily: .kokoro, detail: "American English · af_bella"),
+        VoicePreset(name: "Sky", voiceID: "af_sky", modelFamily: .kokoro, detail: "American English · af_sky"),
+        VoicePreset(name: "Nicole", voiceID: "af_nicole", modelFamily: .kokoro, detail: "American English · af_nicole"),
+        VoicePreset(name: "Sarah", voiceID: "af_sarah", modelFamily: .kokoro, detail: "American English · af_sarah"),
+        VoicePreset(name: "Nova", voiceID: "af_nova", modelFamily: .kokoro, detail: "American English · af_nova"),
+        VoicePreset(name: "River", voiceID: "af_river", modelFamily: .kokoro, detail: "American English · af_river"),
+        VoicePreset(name: "Adam", voiceID: "am_adam", modelFamily: .kokoro, detail: "American English · am_adam"),
+        VoicePreset(name: "Michael", voiceID: "am_michael", modelFamily: .kokoro, detail: "American English · am_michael"),
+        VoicePreset(name: "Eric", voiceID: "am_eric", modelFamily: .kokoro, detail: "American English · am_eric"),
+        VoicePreset(name: "Liam", voiceID: "am_liam", modelFamily: .kokoro, detail: "American English · am_liam"),
+        VoicePreset(name: "Alice (British)", voiceID: "bf_alice", modelFamily: .kokoro, detail: "British English · bf_alice"),
+        VoicePreset(name: "Daniel (British)", voiceID: "bm_daniel", modelFamily: .kokoro, detail: "British English · bm_daniel"),
+    ]
+
+    static let qwenVoicePresets: [VoicePreset] = [
+        VoicePreset(name: "Vivian", voiceID: "Vivian", modelFamily: .qwen, detail: "Bright young voice"),
+        VoicePreset(name: "Serena", voiceID: "Serena", modelFamily: .qwen, detail: "Warm young voice"),
+        VoicePreset(name: "Uncle Fu", voiceID: "Uncle_Fu", modelFamily: .qwen, detail: "Low seasoned voice"),
+        VoicePreset(name: "Dylan", voiceID: "Dylan", modelFamily: .qwen, detail: "Clear Beijing voice"),
+        VoicePreset(name: "Eric", voiceID: "Eric", modelFamily: .qwen, detail: "Lively Chengdu voice"),
+        VoicePreset(name: "Ryan", voiceID: "Ryan", modelFamily: .qwen, detail: "Dynamic English voice"),
+        VoicePreset(name: "Aiden", voiceID: "Aiden", modelFamily: .qwen, detail: "Sunny American voice"),
+        VoicePreset(name: "Ono Anna", voiceID: "Ono_Anna", modelFamily: .qwen, detail: "Playful Japanese voice"),
+        VoicePreset(name: "Sohee", voiceID: "Sohee", modelFamily: .qwen, detail: "Warm Korean voice"),
+    ]
+
+    static let chatterboxVoicePresets: [VoicePreset] = [
+        VoicePreset(name: "Default", voiceID: "default", modelFamily: .chatterbox, detail: "Built-in fallback voice"),
+        VoicePreset(name: "Reference Voice", voiceID: "reference", modelFamily: .chatterbox, detail: "Use a saved reference clip"),
+        VoicePreset(name: "Expressive", voiceID: "expressive", modelFamily: .chatterbox, detail: "Higher emotion setting"),
     ]
 
     private var model: (any SpeechGenerationModel)?
@@ -205,9 +247,95 @@ class SpeechEngine: NSObject, ObservableObject {
     private static let minimumStartupBufferSeconds = 1.25
     private static let comfortableStartupBufferSeconds = 3.0
     private static let lowWaterWallSeconds = 2.5
+    private static let selectedVoiceModelKey = "selectedVoiceModel"
+    private static let legacySelectedVoiceKey = "selectedVoice"
 
     override init() {
         super.init()
+    }
+
+    static func voicePresets(for modelFamily: VoiceModelFamily) -> [VoicePreset] {
+        switch modelFamily {
+        case .kokoro: return voicePresets
+        case .qwen: return qwenVoicePresets
+        case .chatterbox: return chatterboxVoicePresets
+        }
+    }
+
+    func selectVoiceModel(_ modelFamily: VoiceModelFamily) {
+        guard selectedVoiceModel != modelFamily else { return }
+        stopVoicePreview()
+        selectedVoiceModel = modelFamily
+        UserDefaults.standard.set(modelFamily.rawValue, forKey: Self.selectedVoiceModelKey)
+        selectedVoice = Self.savedVoiceID(for: modelFamily)
+        log.info("Voice model changed to: \(modelFamily.rawValue), voice: \(self.selectedVoice)")
+        restartPlaybackIfNeeded()
+    }
+
+    func selectVoice(_ preset: VoicePreset) {
+        if selectedVoiceModel != preset.modelFamily {
+            selectedVoiceModel = preset.modelFamily
+            UserDefaults.standard.set(preset.modelFamily.rawValue, forKey: Self.selectedVoiceModelKey)
+        }
+
+        guard selectedVoice != preset.voiceID else { return }
+        stopVoicePreview()
+        selectedVoice = preset.voiceID
+        persistSelectedVoice()
+        log.info("Voice changed to: \(self.selectedVoice)")
+        restartPlaybackIfNeeded()
+    }
+
+    func canPreview(_ preset: VoicePreset) -> Bool {
+        preset.modelFamily == .kokoro && modelStatus == .ready && state == .idle
+    }
+
+    private static func savedVoiceModel() -> VoiceModelFamily {
+        guard let raw = UserDefaults.standard.string(forKey: selectedVoiceModelKey),
+              let modelFamily = VoiceModelFamily(rawValue: raw) else {
+            return .kokoro
+        }
+        return modelFamily
+    }
+
+    private static func voiceDefaultsKey(for modelFamily: VoiceModelFamily) -> String {
+        "selectedVoice.\(modelFamily.rawValue)"
+    }
+
+    private static func savedVoiceID(for modelFamily: VoiceModelFamily) -> String {
+        let saved = UserDefaults.standard.string(forKey: voiceDefaultsKey(for: modelFamily))
+        let legacySaved = modelFamily == .kokoro
+            ? UserDefaults.standard.string(forKey: legacySelectedVoiceKey)
+            : nil
+        let fallback = voicePresets(for: modelFamily).first?.voiceID ?? VoicePreset.defaultPreset.voiceID
+        let candidate = saved ?? legacySaved ?? fallback
+        guard voicePresets(for: modelFamily).contains(where: { $0.voiceID == candidate }) else {
+            return fallback
+        }
+        return candidate
+    }
+
+    private func persistSelectedVoice() {
+        UserDefaults.standard.set(selectedVoice, forKey: Self.voiceDefaultsKey(for: selectedVoiceModel))
+        if selectedVoiceModel == .kokoro {
+            UserDefaults.standard.set(selectedVoice, forKey: Self.legacySelectedVoiceKey)
+        }
+    }
+
+    private func restartPlaybackIfNeeded() {
+        guard state == .playing || state == .paused || state == .generating else { return }
+        guard selectedVoiceModel == .kokoro else { return }
+        let textToRepeat = currentText.isEmpty ? ReadingQueue.shared.currentItem?.text : currentText
+        if let text = textToRepeat {
+            speak(text)
+        }
+    }
+
+    private var kokoroPlaybackVoiceID: String {
+        if selectedVoiceModel == .kokoro {
+            return selectedVoice
+        }
+        return Self.savedVoiceID(for: .kokoro)
     }
 
     // MARK: - Model Loading
@@ -273,6 +401,11 @@ class SpeechEngine: NSObject, ObservableObject {
     // MARK: - Voice Preview
 
     func previewVoice(_ preset: VoicePreset) {
+        guard preset.modelFamily == .kokoro else {
+            log.warning("previewVoice() called for unsupported model \(preset.modelFamily.rawValue)")
+            return
+        }
+
         if previewingVoice == preset.kokoroVoice {
             stopVoicePreview()
             return
@@ -438,7 +571,7 @@ class SpeechEngine: NSObject, ObservableObject {
                     let params = GenerateParameters()
                     let audio = try await model.generate(
                         text: trimmed,
-                        voice: self.selectedVoice,
+                        voice: self.kokoroPlaybackVoiceID,
                         refAudio: nil,
                         refText: nil,
                         language: "en-us",

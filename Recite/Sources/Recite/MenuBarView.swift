@@ -1226,11 +1226,52 @@ struct SettingsDetailView: View {
                     }
                 }
 
+                SettingsPanel {
+                    HStack(alignment: .center, spacing: 18) {
+                        ZStack {
+                            Circle()
+                                .fill(Color.accentColor.opacity(0.16))
+                            Image(systemName: "slider.horizontal.3")
+                                .font(.system(size: 20, weight: .semibold))
+                                .foregroundColor(.accentColor)
+                        }
+                        .frame(width: 46, height: 46)
+
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text("Voice Model")
+                                        .font(.system(size: 16, weight: .semibold))
+                                    Text(engine.selectedVoiceModel.detail)
+                                        .font(.system(size: 12))
+                                        .foregroundColor(.secondary)
+                                }
+
+                                Spacer()
+
+                                Picker("", selection: Binding(
+                                    get: { engine.selectedVoiceModel },
+                                    set: { engine.selectVoiceModel($0) }
+                                )) {
+                                    ForEach(VoiceModelFamily.allCases) { modelFamily in
+                                        Text(modelFamily.displayName).tag(modelFamily)
+                                    }
+                                }
+                                .pickerStyle(.segmented)
+                                .frame(width: 340)
+                            }
+                        }
+                    }
+                }
+
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
-                        Label("Voices", systemImage: "mic")
+                        Label("\(engine.selectedVoiceModel.displayName) Voices", systemImage: "mic")
                             .font(.system(size: 16, weight: .semibold))
                         Spacer()
+                        if !engine.selectedVoiceModel.supportsLocalPlayback {
+                            StatusPill(title: "Saved", systemImage: "bookmark.fill", color: .orange)
+                        }
                         if engine.previewingVoice != nil {
                             Button {
                                 engine.stopVoicePreview()
@@ -1242,13 +1283,14 @@ struct SettingsDetailView: View {
                     }
 
                     VStack(spacing: 8) {
-                        ForEach(SpeechEngine.voicePresets) { preset in
+                        ForEach(SpeechEngine.voicePresets(for: engine.selectedVoiceModel)) { preset in
                             VoiceChoiceRow(
                                 preset: preset,
-                                isSelected: engine.selectedVoice == preset.kokoroVoice,
+                                isSelected: engine.selectedVoiceModel == preset.modelFamily && engine.selectedVoice == preset.voiceID,
                                 isPreviewing: engine.previewingVoice == preset.kokoroVoice,
-                                canPreview: engine.modelStatus == .ready && engine.state == .idle,
-                                select: { engine.selectedVoice = preset.kokoroVoice },
+                                canPreview: engine.canPreview(preset),
+                                showsPreview: preset.modelFamily == .kokoro,
+                                select: { engine.selectVoice(preset) },
                                 preview: { engine.previewVoice(preset) }
                             )
                         }
@@ -1310,6 +1352,7 @@ private struct VoiceChoiceRow: View {
     let isSelected: Bool
     let isPreviewing: Bool
     let canPreview: Bool
+    let showsPreview: Bool
     let select: () -> Void
     let preview: () -> Void
 
@@ -1337,14 +1380,16 @@ private struct VoiceChoiceRow: View {
             }
             .buttonStyle(.plain)
 
-            Button(action: preview) {
-                Label(isPreviewing ? "Stop" : "Preview",
-                      systemImage: isPreviewing ? "stop.fill" : "play.fill")
-                    .font(.system(size: 12, weight: .semibold))
-                    .frame(width: 84)
+            if showsPreview {
+                Button(action: preview) {
+                    Label(isPreviewing ? "Stop" : "Preview",
+                          systemImage: isPreviewing ? "stop.fill" : "play.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: 84)
+                }
+                .controlSize(.small)
+                .disabled(!canPreview && !isPreviewing)
             }
-            .controlSize(.small)
-            .disabled(!canPreview && !isPreviewing)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
@@ -1362,11 +1407,7 @@ private struct VoiceChoiceRow: View {
     }
 
     private var voiceDescription: String {
-        let locale = preset.kokoroVoice.hasPrefix("b") ? "British" : "American"
-        let tone = preset.kokoroVoice.hasPrefix("a") || preset.kokoroVoice.hasPrefix("b")
-            ? "English"
-            : "Voice"
-        return "\(locale) \(tone) · \(preset.kokoroVoice)"
+        preset.detail
     }
 }
 
