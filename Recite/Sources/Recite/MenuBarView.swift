@@ -1372,6 +1372,11 @@ private struct VoiceChoiceRow: View {
                         Text(voiceDescription)
                             .font(.system(size: 11))
                             .foregroundColor(.secondary)
+                        Text("\"\(preset.sampleText)\"")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary.opacity(0.9))
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
                     Spacer()
@@ -1382,7 +1387,7 @@ private struct VoiceChoiceRow: View {
 
             if showsPreview {
                 Button(action: preview) {
-                    Label(isPreviewing ? "Stop" : "Preview",
+                    Label(isPreviewing ? "Stop" : "Sample",
                           systemImage: isPreviewing ? "stop.fill" : "play.fill")
                         .font(.system(size: 12, weight: .semibold))
                         .frame(width: 84)

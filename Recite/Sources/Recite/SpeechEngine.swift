@@ -46,6 +46,48 @@ struct VoicePreset: Identifiable, Hashable {
 
     var kokoroVoice: String { voiceID }
 
+    var sampleText: String {
+        switch modelFamily {
+        case .kokoro:
+            switch voiceID {
+            case "af_heart": return "A calm voice for long articles and notes."
+            case "af_bella": return "Soft and clear, with a little warmth."
+            case "af_sky": return "Bright, steady, and easy to follow."
+            case "af_nicole": return "A gentle voice for focused reading."
+            case "af_sarah": return "Clean narration for emails and essays."
+            case "af_nova": return "Modern and crisp, good for quick reads."
+            case "af_river": return "Relaxed pacing for longer passages."
+            case "am_adam": return "A grounded voice for plain spoken text."
+            case "am_michael": return "Confident narration with a clear tone."
+            case "am_eric": return "Direct and simple, good for short notes."
+            case "am_liam": return "Light, natural, and conversational."
+            case "bf_alice": return "A British voice for clear narration."
+            case "bm_daniel": return "A steady British voice for longer reads."
+            default: return "Recite can read selected text aloud on your Mac."
+            }
+        case .qwen:
+            switch voiceID {
+            case "Vivian": return "A bright voice reading a simple note."
+            case "Serena": return "A warm voice for calm daily reading."
+            case "Uncle_Fu": return "A low mellow voice for reflective text."
+            case "Dylan": return "A clear voice with lively character."
+            case "Eric": return "A vivid voice for casual spoken lines."
+            case "Ryan": return "A rhythmic voice for energetic narration."
+            case "Aiden": return "A sunny voice for friendly explanations."
+            case "Ono_Anna": return "A playful voice for short story moments."
+            case "Sohee": return "An emotional voice for expressive passages."
+            default: return "This Qwen voice can be used for local speech."
+            }
+        case .chatterbox:
+            switch voiceID {
+            case "default": return "A neutral Chatterbox sample voice."
+            case "reference": return "This uses your saved reference voice."
+            case "expressive": return "A more animated Chatterbox reading."
+            default: return "This Chatterbox voice uses a reference sample."
+            }
+        }
+    }
+
     static let defaultPreset = VoicePreset(
         name: "Heart",
         voiceID: "af_heart",
@@ -422,7 +464,7 @@ class SpeechEngine: NSObject, ObservableObject {
         previewTask = Task {
             do {
                 let params = GenerateParameters()
-                let sampleText = "Hello from \(preset.name), Recite can read articles, emails, and notes out loud"
+                let sampleText = preset.sampleText
                 let audio = try await model.generate(
                     text: sampleText,
                     voice: preset.kokoroVoice,
