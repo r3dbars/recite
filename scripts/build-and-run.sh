@@ -48,6 +48,7 @@ cp "$PROJECT_DIR/.build/debug/Recite" "$MACOS/Recite"
 cp "$RESOURCES/Info.plist" "$CONTENTS/Info.plist"
 cp "$RESOURCES"/AppIcon.icns "$CONTENTS/Resources/" 2>/dev/null || true
 cp "$RESOURCES"/MenuBarIcon*.png "$CONTENTS/Resources/" 2>/dev/null || true
+cp -R "$RESOURCES"/VoiceSamples "$CONTENTS/Resources/" 2>/dev/null || true
 
 if [ -z "$ESPEAK_PREFIX" ]; then
   ESPEAK_PREFIX="$(brew --prefix espeak-ng 2>/dev/null || true)"

@@ -36,17 +36,11 @@ enum VoiceModelFamily: String, CaseIterable, Identifiable {
     }
 
     var supportsVoiceSamples: Bool {
-        switch self {
-        case .kokoro, .qwen: return true
-        case .chatterbox: return false
-        }
+        true
     }
 
     var sampleUnavailableReason: String? {
-        switch self {
-        case .kokoro, .qwen: return nil
-        case .chatterbox: return "Needs reference audio"
-        }
+        nil
     }
 }
 
@@ -115,6 +109,11 @@ struct VoicePreset: Identifiable, Hashable {
         case .kokoro, .qwen: return voiceID
         case .chatterbox: return ""
         }
+    }
+
+    var bundledSampleName: String? {
+        guard modelFamily == .chatterbox else { return nil }
+        return "chatterbox_\(voiceID)"
     }
 
     static let defaultPreset = VoicePreset(
@@ -311,6 +310,8 @@ class SpeechEngine: NSObject, ObservableObject {
     private var previewTask: Task<Void, Never>?
     private var previewAudioEngine: AVAudioEngine?
     private var previewPlayerNode: AVAudioPlayerNode?
+    private var previewFilePlayer: AVAudioPlayer?
+    private var previewFileTask: Task<Void, Never>?
     private var sampleModels: [VoiceModelFamily: any SpeechGenerationModel] = [:]
 
     private static let modelID = "mlx-community/Kokoro-82M-bf16"
@@ -362,10 +363,13 @@ class SpeechEngine: NSObject, ObservableObject {
     func canPreview(_ preset: VoicePreset) -> Bool {
         guard preset.modelFamily.supportsVoiceSamples else { return false }
         guard state == .idle else { return false }
+        if bundledSampleURL(for: preset) != nil {
+            return true
+        }
         if preset.modelFamily == .kokoro {
             return modelStatus == .ready
         }
-        return true
+        return preset.modelFamily == .qwen
     }
 
     private static func savedVoiceModel() -> VoiceModelFamily {
@@ -497,6 +501,11 @@ class SpeechEngine: NSObject, ObservableObject {
         stopVoicePreview()
         previewingVoice = preset.id
 
+        if let sampleURL = bundledSampleURL(for: preset) {
+            playBundledVoicePreview(sampleURL, previewID: preset.id)
+            return
+        }
+
         previewTask = Task {
             do {
                 let previewModel = try await self.sampleModel(for: preset.modelFamily)
@@ -552,14 +561,49 @@ class SpeechEngine: NSObject, ObservableObject {
         }
     }
 
+    private func bundledSampleURL(for preset: VoicePreset) -> URL? {
+        guard let sampleName = preset.bundledSampleName else { return nil }
+        return Bundle.main.url(
+            forResource: sampleName,
+            withExtension: "wav",
+            subdirectory: "VoiceSamples"
+        )
+    }
+
     func stopVoicePreview() {
         previewTask?.cancel()
         previewTask = nil
+        previewFileTask?.cancel()
+        previewFileTask = nil
+        previewFilePlayer?.stop()
+        previewFilePlayer = nil
         previewPlayerNode?.stop()
         previewAudioEngine?.stop()
         previewPlayerNode = nil
         previewAudioEngine = nil
         previewingVoice = nil
+    }
+
+    private func playBundledVoicePreview(_ url: URL, previewID: String) {
+        do {
+            let player = try AVAudioPlayer(contentsOf: url)
+            previewFilePlayer = player
+            player.prepareToPlay()
+            player.play()
+
+            let duration = max(player.duration, 0.1)
+            previewFileTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
+                await MainActor.run {
+                    guard let self, self.previewingVoice == previewID else { return }
+                    self.stopVoicePreview()
+                }
+            }
+            log.info("Bundled voice preview started for \(previewID)")
+        } catch {
+            log.error("Bundled voice preview failed: \(error.localizedDescription)")
+            stopVoicePreview()
+        }
     }
 
     private func playVoicePreview(_ samples: [Float], previewID: String, sampleRate: Double) {
