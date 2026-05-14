@@ -138,6 +138,11 @@ if [ -x "$MACOS/espeak-ng" ]; then
   codesign --force --sign "$SIGN_IDENTITY" --options runtime "$MACOS/espeak-ng"
 fi
 codesign --force --sign "$SIGN_IDENTITY" --options runtime --entitlements "$ENTITLEMENTS" --deep "$APP_DIR"
+# For ad-hoc local builds only, re-sign espeak-ng without Hardened Runtime so
+# Library Validation does not block its bundled dylib. Keep Developer ID builds strict.
+if [ "$SIGN_IDENTITY" = "-" ] && [ -x "$MACOS/espeak-ng" ]; then
+  codesign --force --sign "$SIGN_IDENTITY" "$MACOS/espeak-ng"
+fi
 
 echo "==> Verifying signature..."
 codesign -dvvv "$APP_DIR" 2>&1 | grep -E "Identifier|TeamIdentifier|Signature"
