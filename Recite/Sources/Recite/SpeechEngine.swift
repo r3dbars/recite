@@ -75,15 +75,15 @@ struct VoicePreset: Identifiable, Hashable {
             }
         case .qwen:
             switch voiceID {
-            case "Vivian": return "你好，我是 Vivian，今天想和你读一点轻松的文字。"
-            case "Serena": return "你好，我是 Serena，声音温柔一点，适合慢慢听。"
-            case "Uncle_Fu": return "各位好，我是傅叔，今天给你念一段安静的文字。"
-            case "Dylan": return "你好，我是 Dylan，用清楚的声音读给你听。"
-            case "Eric": return "大家好，我是 Eric，读起来会更有一点活力。"
-            case "Ryan": return "A rhythmic voice for energetic narration."
-            case "Aiden": return "A sunny voice for friendly explanations."
-            case "Ono_Anna": return "こんにちは、Ono Anna です。短い文章を楽しく読みます。"
-            case "Sohee": return "안녕하세요, 저는 Sohee입니다. 따뜻한 목소리로 읽어 드릴게요."
+            case "Vivian": return "Hello, I am Vivian. This is a quick Recite voice sample."
+            case "Serena": return "Hello, I am Serena. This is a quick Recite voice sample."
+            case "Uncle_Fu": return "Hello, I am Uncle Fu. This is a quick Recite voice sample."
+            case "Dylan": return "Hello, I am Dylan. This is a quick Recite voice sample."
+            case "Eric": return "Hello, I am Eric. This is a quick Recite voice sample."
+            case "Ryan": return "Hello, I am Ryan. This is a quick Recite voice sample."
+            case "Aiden": return "Hello, I am Aiden. This is a quick Recite voice sample."
+            case "Ono_Anna": return "Hello, I am Ono Anna. This is a quick Recite voice sample."
+            case "Sohee": return "Hello, I am Sohee. This is a quick Recite voice sample."
             default: return "This Qwen voice can be used for local speech."
             }
         case .chatterbox:
