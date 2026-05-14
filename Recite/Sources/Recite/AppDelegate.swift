@@ -73,7 +73,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         trackFrontmostApp()
         showMainWindowOnFirstLaunch()
 
-        // Load Kokoro TTS model in background
+        // Load the selected local TTS model in background
         Task {
             await engine.loadModel()
         }
@@ -244,7 +244,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Model status
         let statusTitle: String
         switch engine.modelStatus {
-        case .ready: statusTitle = "Kokoro TTS Ready"
+        case .ready: statusTitle = "\(engine.selectedSpeechModel.name) Ready"
         case .loading: statusTitle = "Loading Model…"
         case .downloading: statusTitle = "Downloading Model…"
         case .notLoaded: statusTitle = "Model Not Loaded"

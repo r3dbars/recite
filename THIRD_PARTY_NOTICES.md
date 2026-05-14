@@ -25,11 +25,28 @@ runtime helpers.
 
 ## Kokoro 82M
 
-- Model used by Recite: https://huggingface.co/mlx-community/Kokoro-82M-bf16
+- Model available in Recite: https://huggingface.co/mlx-community/Kokoro-82M-bf16
 - Original model: https://huggingface.co/hexgrad/Kokoro-82M
 - Purpose: local neural text-to-speech voice generation
 - License: Apache-2.0
-- Note: the model is downloaded on first launch and is not bundled in the app DMG.
+- Note: the model is downloaded when selected and is not bundled in the app DMG.
+
+## Qwen3-TTS
+
+- Model available in Recite: https://huggingface.co/mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit
+- Original model family: https://github.com/QwenLM/Qwen3-TTS
+- Purpose: local neural text-to-speech voice generation
+- License: Apache-2.0
+- Note: the model is downloaded when selected and is not bundled in the app DMG.
+
+## Chatterbox Turbo
+
+- Model available in Recite: https://huggingface.co/mlx-community/chatterbox-turbo-4bit
+- Original project: https://github.com/resemble-ai/chatterbox
+- Purpose: local neural text-to-speech voice generation
+- Model license: Apache-2.0
+- Original project license: MIT
+- Note: the model is downloaded when selected and is not bundled in the app DMG.
 
 ## mlx-audio-swift
 

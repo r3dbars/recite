@@ -23,7 +23,7 @@ People who install the DMG do not need Homebrew or a separate `espeak-ng` instal
 ## First Launch
 
 1. Recite asks for Accessibility permission.
-2. The Kokoro 82M model downloads from Hugging Face.
+2. The selected voice model downloads from Hugging Face.
 3. The menu bar status changes to ready when the model is loaded.
 
 Then select text in another app and press **Control + Option + R**.
