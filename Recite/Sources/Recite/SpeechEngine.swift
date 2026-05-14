@@ -34,6 +34,20 @@ enum VoiceModelFamily: String, CaseIterable, Identifiable {
     var supportsLocalPlayback: Bool {
         self == .kokoro
     }
+
+    var supportsVoiceSamples: Bool {
+        switch self {
+        case .kokoro, .qwen: return true
+        case .chatterbox: return false
+        }
+    }
+
+    var sampleUnavailableReason: String? {
+        switch self {
+        case .kokoro, .qwen: return nil
+        case .chatterbox: return "Needs reference audio"
+        }
+    }
 }
 
 struct VoicePreset: Identifiable, Hashable {
@@ -67,15 +81,15 @@ struct VoicePreset: Identifiable, Hashable {
             }
         case .qwen:
             switch voiceID {
-            case "Vivian": return "A bright voice reading a simple note."
-            case "Serena": return "A warm voice for calm daily reading."
-            case "Uncle_Fu": return "A low mellow voice for reflective text."
-            case "Dylan": return "A clear voice with lively character."
-            case "Eric": return "A vivid voice for casual spoken lines."
+            case "Vivian": return "你好，我是 Vivian，今天想和你读一点轻松的文字。"
+            case "Serena": return "你好，我是 Serena，声音温柔一点，适合慢慢听。"
+            case "Uncle_Fu": return "各位好，我是傅叔，今天给你念一段安静的文字。"
+            case "Dylan": return "你好，我是 Dylan，用清楚的声音读给你听。"
+            case "Eric": return "大家好，我是 Eric，读起来会更有一点活力。"
             case "Ryan": return "A rhythmic voice for energetic narration."
             case "Aiden": return "A sunny voice for friendly explanations."
-            case "Ono_Anna": return "A playful voice for short story moments."
-            case "Sohee": return "An emotional voice for expressive passages."
+            case "Ono_Anna": return "こんにちは、Ono Anna です。短い文章を楽しく読みます。"
+            case "Sohee": return "안녕하세요, 저는 Sohee입니다. 따뜻한 목소리로 읽어 드릴게요."
             default: return "This Qwen voice can be used for local speech."
             }
         case .chatterbox:
@@ -85,6 +99,21 @@ struct VoicePreset: Identifiable, Hashable {
             case "expressive": return "A more animated Chatterbox reading."
             default: return "This Chatterbox voice uses a reference sample."
             }
+        }
+    }
+
+    var sampleLanguage: String {
+        switch modelFamily {
+        case .kokoro: return "en-us"
+        case .qwen: return "auto"
+        case .chatterbox: return "en"
+        }
+    }
+
+    var sampleVoicePrompt: String {
+        switch modelFamily {
+        case .kokoro, .qwen: return voiceID
+        case .chatterbox: return ""
         }
     }
 
@@ -282,8 +311,10 @@ class SpeechEngine: NSObject, ObservableObject {
     private var previewTask: Task<Void, Never>?
     private var previewAudioEngine: AVAudioEngine?
     private var previewPlayerNode: AVAudioPlayerNode?
+    private var sampleModels: [VoiceModelFamily: any SpeechGenerationModel] = [:]
 
     private static let modelID = "mlx-community/Kokoro-82M-bf16"
+    private static let qwenSampleModelID = "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"
     private static let sampleRate: Double = 24000
     private static let fastEnoughMargin = 1.15
     private static let minimumStartupBufferSeconds = 1.25
@@ -329,7 +360,12 @@ class SpeechEngine: NSObject, ObservableObject {
     }
 
     func canPreview(_ preset: VoicePreset) -> Bool {
-        preset.modelFamily == .kokoro && modelStatus == .ready && state == .idle
+        guard preset.modelFamily.supportsVoiceSamples else { return false }
+        guard state == .idle else { return false }
+        if preset.modelFamily == .kokoro {
+            return modelStatus == .ready
+        }
+        return true
     }
 
     private static func savedVoiceModel() -> VoiceModelFamily {
@@ -443,49 +479,76 @@ class SpeechEngine: NSObject, ObservableObject {
     // MARK: - Voice Preview
 
     func previewVoice(_ preset: VoicePreset) {
-        guard preset.modelFamily == .kokoro else {
-            log.warning("previewVoice() called for unsupported model \(preset.modelFamily.rawValue)")
+        guard preset.modelFamily.supportsVoiceSamples else {
+            log.warning("previewVoice() called for unavailable model \(preset.modelFamily.rawValue)")
             return
         }
 
-        if previewingVoice == preset.kokoroVoice {
+        if previewingVoice == preset.id {
             stopVoicePreview()
             return
         }
 
-        guard modelStatus == .ready, let model else {
-            log.warning("previewVoice() called but model not ready")
+        guard canPreview(preset) else {
+            log.warning("previewVoice() called but sample is not ready")
             return
         }
 
         stopVoicePreview()
-        previewingVoice = preset.kokoroVoice
+        previewingVoice = preset.id
 
         previewTask = Task {
             do {
-                let params = GenerateParameters()
+                let previewModel = try await self.sampleModel(for: preset.modelFamily)
+                let params = previewModel.defaultGenerationParameters
                 let sampleText = preset.sampleText
-                let audio = try await model.generate(
+                let audio = try await previewModel.generate(
                     text: sampleText,
-                    voice: preset.kokoroVoice,
+                    voice: preset.sampleVoicePrompt,
                     refAudio: nil,
                     refText: nil,
-                    language: "en-us",
+                    language: preset.sampleLanguage,
                     generationParameters: params
                 )
                 if Task.isCancelled { return }
                 let samples = audio.asArray(Float.self)
                 await MainActor.run {
-                    guard self.previewingVoice == preset.kokoroVoice else { return }
-                    self.playVoicePreview(samples, voiceID: preset.kokoroVoice)
+                    guard self.previewingVoice == preset.id else { return }
+                    self.playVoicePreview(
+                        samples,
+                        previewID: preset.id,
+                        sampleRate: Double(previewModel.sampleRate)
+                    )
                 }
             } catch {
                 log.error("Voice preview failed: \(error.localizedDescription)")
                 await MainActor.run {
-                    guard self.previewingVoice == preset.kokoroVoice else { return }
+                    guard self.previewingVoice == preset.id else { return }
                     self.stopVoicePreview()
                 }
             }
+        }
+    }
+
+    private func sampleModel(for modelFamily: VoiceModelFamily) async throws -> any SpeechGenerationModel {
+        switch modelFamily {
+        case .kokoro:
+            guard let model else {
+                throw AudioGenerationError.modelNotInitialized("Kokoro model not loaded")
+            }
+            return model
+        case .qwen:
+            if let sampleModel = sampleModels[.qwen] {
+                return sampleModel
+            }
+            let sampleModel = try await TTS.loadModel(
+                modelRepo: Self.qwenSampleModelID,
+                modelType: "qwen3_tts"
+            )
+            sampleModels[.qwen] = sampleModel
+            return sampleModel
+        case .chatterbox:
+            throw AudioGenerationError.invalidInput("Chatterbox samples need a Chatterbox runtime and reference audio.")
         }
     }
 
@@ -499,10 +562,10 @@ class SpeechEngine: NSObject, ObservableObject {
         previewingVoice = nil
     }
 
-    private func playVoicePreview(_ samples: [Float], voiceID: String) {
+    private func playVoicePreview(_ samples: [Float], previewID: String, sampleRate: Double) {
         let engine = AVAudioEngine()
         let player = AVAudioPlayerNode()
-        let format = AVAudioFormat(standardFormatWithSampleRate: Self.sampleRate, channels: 1)!
+        let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
 
         engine.attach(player)
         engine.connect(player, to: engine.mainMixerNode, format: format)
@@ -524,12 +587,12 @@ class SpeechEngine: NSObject, ObservableObject {
             previewPlayerNode = player
             player.scheduleBuffer(buffer) { [weak self] in
                 Task { @MainActor in
-                    guard let self, self.previewingVoice == voiceID else { return }
+                    guard let self, self.previewingVoice == previewID else { return }
                     self.stopVoicePreview()
                 }
             }
             player.play()
-            log.info("Voice preview started for \(voiceID)")
+            log.info("Voice preview started for \(previewID)")
         } catch {
             log.error("Voice preview audio failed: \(error.localizedDescription)")
             stopVoicePreview()

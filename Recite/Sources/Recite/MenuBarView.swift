@@ -1270,7 +1270,11 @@ struct SettingsDetailView: View {
                             .font(.system(size: 16, weight: .semibold))
                         Spacer()
                         if !engine.selectedVoiceModel.supportsLocalPlayback {
-                            StatusPill(title: "Saved", systemImage: "bookmark.fill", color: .orange)
+                            StatusPill(
+                                title: engine.selectedVoiceModel.supportsVoiceSamples ? "Samples" : "Reference-only",
+                                systemImage: engine.selectedVoiceModel.supportsVoiceSamples ? "play.circle.fill" : "waveform.badge.mic",
+                                color: engine.selectedVoiceModel.supportsVoiceSamples ? .blue : .orange
+                            )
                         }
                         if engine.previewingVoice != nil {
                             Button {
@@ -1287,9 +1291,10 @@ struct SettingsDetailView: View {
                             VoiceChoiceRow(
                                 preset: preset,
                                 isSelected: engine.selectedVoiceModel == preset.modelFamily && engine.selectedVoice == preset.voiceID,
-                                isPreviewing: engine.previewingVoice == preset.kokoroVoice,
+                                isPreviewing: engine.previewingVoice == preset.id,
                                 canPreview: engine.canPreview(preset),
-                                showsPreview: preset.modelFamily == .kokoro,
+                                showsPreview: preset.modelFamily.supportsVoiceSamples,
+                                unavailableReason: preset.modelFamily.sampleUnavailableReason,
                                 select: { engine.selectVoice(preset) },
                                 preview: { engine.previewVoice(preset) }
                             )
@@ -1353,6 +1358,7 @@ private struct VoiceChoiceRow: View {
     let isPreviewing: Bool
     let canPreview: Bool
     let showsPreview: Bool
+    let unavailableReason: String?
     let select: () -> Void
     let preview: () -> Void
 
@@ -1394,6 +1400,11 @@ private struct VoiceChoiceRow: View {
                 }
                 .controlSize(.small)
                 .disabled(!canPreview && !isPreviewing)
+            } else if let unavailableReason {
+                Text(unavailableReason)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .frame(width: 112, alignment: .trailing)
             }
         }
         .padding(.horizontal, 14)
