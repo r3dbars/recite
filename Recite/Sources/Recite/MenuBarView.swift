@@ -468,8 +468,8 @@ struct PlayerDetailView: View {
                 VStack(spacing: 0) {
                     ReadyCheckRow(
                         icon: "brain",
-                        label: "Kokoro TTS model",
-                        detail: "On-device neural text-to-speech",
+                        label: "TTS model",
+                        detail: engine.selectedSpeechModel.name,
                         status: modelReadyStatus
                     )
                     Divider().padding(.leading, 44)
@@ -941,7 +941,7 @@ struct AboutDetailView: View {
                 // What it does
                 VStack(alignment: .leading, spacing: 20) {
                     AboutSection(title: "What Recite Does") {
-                        Text("Recite reads any text aloud using Kokoro 82M, a fast neural text-to-speech model that runs on your Mac after its first download. No cloud voice API. No subscriptions. Select text in any app, press ⌃⌥R, and Recite speaks it back to you.")
+                        Text("Recite reads any text aloud using local MLX text-to-speech models. It defaults to Kokoro 82M. No cloud voice API. No subscriptions. Select text in any app, press ⌃⌥R, and Recite speaks it back to you.")
                             .font(.system(size: 13))
                             .foregroundColor(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -958,14 +958,14 @@ struct AboutDetailView: View {
                     AboutSection(title: "Under the Hood") {
                         VStack(alignment: .leading, spacing: 8) {
                             AboutBadgeRow(items: [
-                                ("brain", "Kokoro 82M (bf16)"),
+                                ("brain", "Kokoro, Qwen3, Chatterbox"),
                                 ("cpu", "Apple MLX"),
                                 ("lock.shield", "100% on-device"),
                             ])
                             AboutBadgeRow(items: [
                                 ("waveform", "24 kHz audio"),
                                 ("speedometer", "0.5× – 2× speed"),
-                                ("mic", "13 voice presets"),
+                                ("mic", "Kokoro voice presets"),
                             ])
                         }
                     }
@@ -1211,46 +1211,68 @@ struct SettingsDetailView: View {
                 }
 
                 SettingsPanel {
-                    HStack {
-                        Label("Kokoro 82M", systemImage: "brain")
-                            .font(.system(size: 13, weight: .semibold))
-                        Text("bf16")
-                            .font(.system(size: 11, weight: .semibold))
-                            .foregroundColor(.secondary)
-                            .padding(.horizontal, 7)
-                            .padding(.vertical, 3)
-                            .background(Color(NSColor.controlBackgroundColor))
-                            .clipShape(Capsule())
-                        Spacer()
-                        modelStatusView
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Label("Text-to-Speech Model", systemImage: engine.selectedSpeechModel.systemImage)
+                                .font(.system(size: 16, weight: .semibold))
+                            Spacer()
+                            modelStatusView
+                        }
+
+                        Picker(
+                            "Model",
+                            selection: Binding(
+                                get: { engine.selectedSpeechModelID },
+                                set: { engine.selectedSpeechModelID = $0 }
+                            )
+                        ) {
+                            ForEach(SpeechEngine.speechModels) { model in
+                                Text(model.pickerTitle).tag(model.id)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(maxWidth: 340, alignment: .leading)
+
+                        HStack(spacing: 8) {
+                            Text(engine.selectedSpeechModel.detail)
+                                .font(.system(size: 12))
+                                .foregroundColor(.secondary)
+                            Text(engine.selectedSpeechModel.modelID)
+                                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
                     }
                 }
 
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Label("Voices", systemImage: "mic")
-                            .font(.system(size: 16, weight: .semibold))
-                        Spacer()
-                        if engine.previewingVoice != nil {
-                            Button {
-                                engine.stopVoicePreview()
-                            } label: {
-                                Label("Stop", systemImage: "stop.fill")
+                if engine.selectedSpeechModel.supportsKokoroVoices {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Label("Voices", systemImage: "mic")
+                                .font(.system(size: 16, weight: .semibold))
+                            Spacer()
+                            if engine.previewingVoice != nil {
+                                Button {
+                                    engine.stopVoicePreview()
+                                } label: {
+                                    Label("Stop", systemImage: "stop.fill")
+                                }
+                                .controlSize(.small)
                             }
-                            .controlSize(.small)
                         }
-                    }
 
-                    VStack(spacing: 8) {
-                        ForEach(SpeechEngine.voicePresets) { preset in
-                            VoiceChoiceRow(
-                                preset: preset,
-                                isSelected: engine.selectedVoice == preset.kokoroVoice,
-                                isPreviewing: engine.previewingVoice == preset.kokoroVoice,
-                                canPreview: engine.modelStatus == .ready && engine.state == .idle,
-                                select: { engine.selectedVoice = preset.kokoroVoice },
-                                preview: { engine.previewVoice(preset) }
-                            )
+                        VStack(spacing: 8) {
+                            ForEach(SpeechEngine.voicePresets) { preset in
+                                VoiceChoiceRow(
+                                    preset: preset,
+                                    isSelected: engine.selectedVoice == preset.kokoroVoice,
+                                    isPreviewing: engine.previewingVoice == preset.kokoroVoice,
+                                    canPreview: engine.modelStatus == .ready && engine.state == .idle,
+                                    select: { engine.selectedVoice = preset.kokoroVoice },
+                                    preview: { engine.previewVoice(preset) }
+                                )
+                            }
                         }
                     }
                 }

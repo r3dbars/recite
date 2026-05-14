@@ -34,11 +34,17 @@ Recite does it locally instead. It downloads a small AI voice model once, then u
 3. A local AI voice model turns the text into audio.
 4. Your Mac plays the audio back.
 
-Recite uses Kokoro 82M for the voice and Apple MLX to run it efficiently on Apple Silicon Macs.
+Recite defaults to Kokoro 82M and can also use other local MLX voice models on Apple Silicon Macs.
 
 ## Model And Voices
 
-Recite uses [Kokoro-82M-bf16](https://huggingface.co/mlx-community/Kokoro-82M-bf16), an MLX conversion of [hexgrad/Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M). The model is about 355 MB, downloads once on first launch, and runs on your Mac.
+Recite defaults to [Kokoro-82M-bf16](https://huggingface.co/mlx-community/Kokoro-82M-bf16), an MLX conversion of [hexgrad/Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M). You can switch models in Settings.
+
+Current model choices:
+
+- Kokoro 82M: `mlx-community/Kokoro-82M-bf16`
+- Qwen3-TTS: `mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit`
+- Chatterbox Turbo: `mlx-community/chatterbox-turbo-4bit`
 
 Recite includes 13 English voice presets:
 
@@ -82,7 +88,7 @@ swift build
 
 Source builds use your local Homebrew `espeak-ng` to assemble the app bundle. The downloadable DMG bundles that helper for normal users.
 
-On first launch, Recite downloads the Kokoro voice model from Hugging Face. After that, reading text aloud runs locally on your Mac.
+On first launch, Recite downloads the selected voice model from Hugging Face. After that, reading text aloud runs locally on your Mac.
 
 ## Use Recite
 
@@ -101,7 +107,7 @@ Recite is local-first by design.
 - The copy fallback restores your clipboard after it runs.
 - Recite does not send selected text or generated audio to a server.
 - Reading history is stored locally in macOS user defaults and can be cleared in the app.
-- The Kokoro voice model is downloaded once from Hugging Face on first launch.
+- The selected voice model is downloaded once from Hugging Face.
 
 Please do not paste private text into GitHub issues.
 
@@ -128,7 +134,7 @@ Recite/Sources/Recite/AppDelegate.swift
 Recite/Sources/Recite/TextGrabber.swift
                                       Selected text capture
 Recite/Sources/Recite/SpeechEngine.swift
-                                      Kokoro model loading and audio playback
+                                      MLX model loading and audio playback
 Recite/Sources/Recite/ReadingQueue.swift
                                       Queue and local history
 Recite/Sources/Recite/MenuBarView.swift

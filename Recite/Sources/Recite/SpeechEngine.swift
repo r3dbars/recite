@@ -20,6 +20,62 @@ struct VoicePreset: Identifiable, Hashable {
     )
 }
 
+struct SpeechModelPreset: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let modelID: String
+    let badge: String
+    let detail: String
+    let systemImage: String
+    let language: String?
+    let voicePrompt: String?
+    let supportsKokoroVoices: Bool
+    let requiresEspeakTextProcessor: Bool
+
+    var pickerTitle: String {
+        "\(name) (\(badge))"
+    }
+
+    static let kokoro = SpeechModelPreset(
+        id: "kokoro",
+        name: "Kokoro 82M",
+        modelID: "mlx-community/Kokoro-82M-bf16",
+        badge: "bf16",
+        detail: "Fast default voice model",
+        systemImage: "brain",
+        language: "en-us",
+        voicePrompt: nil,
+        supportsKokoroVoices: true,
+        requiresEspeakTextProcessor: true
+    )
+
+    static let qwen3 = SpeechModelPreset(
+        id: "qwen3-tts",
+        name: "Qwen3-TTS",
+        modelID: "mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit",
+        badge: "8-bit",
+        detail: "MLX multilingual model",
+        systemImage: "waveform",
+        language: "English",
+        voicePrompt: nil,
+        supportsKokoroVoices: false,
+        requiresEspeakTextProcessor: false
+    )
+
+    static let chatterbox = SpeechModelPreset(
+        id: "chatterbox",
+        name: "Chatterbox Turbo",
+        modelID: "mlx-community/chatterbox-turbo-4bit",
+        badge: "4-bit",
+        detail: "MLX expressive English model",
+        systemImage: "quote.bubble",
+        language: nil,
+        voicePrompt: nil,
+        supportsKokoroVoices: false,
+        requiresEspeakTextProcessor: false
+    )
+}
+
 private enum EspeakTextProcessorError: LocalizedError {
     case missingExecutable
     case failed(status: Int32, stderr: String)
@@ -116,8 +172,7 @@ struct EspeakTextProcessor: TextProcessor {
     }
 }
 
-/// Text-to-speech engine powered by Kokoro 82M via mlx-audio-swift.
-/// Non-autoregressive: generates entire audio in one forward pass.
+/// Text-to-speech engine powered by local MLX text-to-speech models.
 @MainActor
 class SpeechEngine: NSObject, ObservableObject {
     static let shared = SpeechEngine()
@@ -146,6 +201,24 @@ class SpeechEngine: NSObject, ObservableObject {
         }
     }
     @Published var previewingVoice: String?
+    @Published var selectedSpeechModelID: String = UserDefaults.standard.string(forKey: "selectedSpeechModelID")
+        ?? SpeechModelPreset.kokoro.id {
+        didSet {
+            guard selectedSpeechModelID != oldValue else { return }
+            guard Self.speechModels.contains(where: { $0.id == selectedSpeechModelID }) else {
+                selectedSpeechModelID = Self.defaultSpeechModel.id
+                return
+            }
+
+            log.info("Speech model changed to: \(self.selectedSpeechModelID)")
+            UserDefaults.standard.set(selectedSpeechModelID, forKey: "selectedSpeechModelID")
+            stop()
+            model = nil
+            loadedSpeechModelID = nil
+            modelStatus = .notLoaded
+            Task { await self.loadModel() }
+        }
+    }
     @Published var selectedVoice: String = UserDefaults.standard.string(forKey: "selectedVoice")
         ?? VoicePreset.defaultPreset.kokoroVoice {
         didSet {
@@ -175,7 +248,19 @@ class SpeechEngine: NSObject, ObservableObject {
         VoicePreset(name: "Daniel (British)", kokoroVoice: "bm_daniel"),
     ]
 
+    static let defaultSpeechModel = SpeechModelPreset.kokoro
+    static let speechModels: [SpeechModelPreset] = [
+        .kokoro,
+        .qwen3,
+        .chatterbox,
+    ]
+
+    var selectedSpeechModel: SpeechModelPreset {
+        Self.speechModels.first { $0.id == selectedSpeechModelID } ?? Self.defaultSpeechModel
+    }
+
     private var model: (any SpeechGenerationModel)?
+    private var loadedSpeechModelID: String?
     private var generationTask: Task<Void, Never>?
 
     // Generation ID: incremented on each speak() call so stale callbacks are ignored
@@ -199,8 +284,7 @@ class SpeechEngine: NSObject, ObservableObject {
     private var previewAudioEngine: AVAudioEngine?
     private var previewPlayerNode: AVAudioPlayerNode?
 
-    private static let modelID = "mlx-community/Kokoro-82M-bf16"
-    private static let sampleRate: Double = 24000
+    private var playbackSampleRate: Double = 24000
     private static let fastEnoughMargin = 1.15
     private static let minimumStartupBufferSeconds = 1.25
     private static let comfortableStartupBufferSeconds = 3.0
@@ -212,17 +296,17 @@ class SpeechEngine: NSObject, ObservableObject {
 
     // MARK: - Model Loading
 
-    /// Returns true if the Kokoro model is already present in the local HuggingFace cache.
-    private func isModelCached() -> Bool {
+    /// Returns true if the selected model is already present in the local HuggingFace cache.
+    private func isModelCached(_ preset: SpeechModelPreset) -> Bool {
         // Mirrors ModelUtils.resolveOrDownloadModel path logic:
-        // <HubCache.default.cacheDirectory>/mlx-audio/mlx-community_Kokoro-82M-bf16/
+        // <HubCache.default.cacheDirectory>/mlx-audio/<repo-with-slashes-replaced>/
         let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
             .deletingLastPathComponent()
             .appendingPathComponent(".cache/huggingface/hub")
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".cache/huggingface/hub")
         let modelDir = cacheDir
             .appendingPathComponent("mlx-audio")
-            .appendingPathComponent(Self.modelID.replacingOccurrences(of: "/", with: "_"))
+            .appendingPathComponent(preset.modelID.replacingOccurrences(of: "/", with: "_"))
         guard let files = try? FileManager.default.contentsOfDirectory(
             at: modelDir, includingPropertiesForKeys: [.fileSizeKey]
         ) else { return false }
@@ -234,12 +318,13 @@ class SpeechEngine: NSObject, ObservableObject {
     }
 
     func loadModel() async {
-        guard modelStatus == .notLoaded || isErrorStatus else {
+        let preset = selectedSpeechModel
+        guard loadedSpeechModelID != preset.id || modelStatus == .notLoaded || isErrorStatus else {
             log.info("loadModel() skipped — modelStatus=\(String(describing: self.modelStatus))")
             return
         }
-        log.info("loadModel() starting...")
-        if isModelCached() {
+        log.info("loadModel() starting for \(preset.modelID)")
+        if isModelCached(preset) {
             modelStatus = .loading
             log.info("Model found in cache — loading weights")
         } else {
@@ -248,14 +333,19 @@ class SpeechEngine: NSObject, ObservableObject {
         }
 
         do {
-            let textProcessor = EspeakTextProcessor()
-            let loaded = try await KokoroModel.fromPretrained(
-                Self.modelID,
+            let textProcessor: TextProcessor? = preset.requiresEspeakTextProcessor
+                ? EspeakTextProcessor()
+                : nil
+            let loaded = try await TTS.loadModel(
+                modelRepo: preset.modelID,
                 textProcessor: textProcessor
             )
+            guard self.selectedSpeechModel.id == preset.id else { return }
             self.model = loaded
+            self.loadedSpeechModelID = preset.id
+            self.playbackSampleRate = Double(loaded.sampleRate)
             modelStatus = .ready
-            log.info("Kokoro model loaded successfully")
+            log.info("\(preset.name) model loaded successfully")
             if state == .idle, let item = ReadingQueue.shared.currentItem {
                 speak(item.text)
             }
@@ -288,14 +378,14 @@ class SpeechEngine: NSObject, ObservableObject {
 
         previewTask = Task {
             do {
-                let params = GenerateParameters()
+                let params = model.defaultGenerationParameters
                 let sampleText = "Hello from \(preset.name), Recite can read articles, emails, and notes out loud"
                 let audio = try await model.generate(
                     text: sampleText,
                     voice: preset.kokoroVoice,
                     refAudio: nil,
                     refText: nil,
-                    language: "en-us",
+                    language: selectedSpeechModel.language,
                     generationParameters: params
                 )
                 if Task.isCancelled { return }
@@ -327,7 +417,7 @@ class SpeechEngine: NSObject, ObservableObject {
     private func playVoicePreview(_ samples: [Float], voiceID: String) {
         let engine = AVAudioEngine()
         let player = AVAudioPlayerNode()
-        let format = AVAudioFormat(standardFormatWithSampleRate: Self.sampleRate, channels: 1)!
+        let format = AVAudioFormat(standardFormatWithSampleRate: playbackSampleRate, channels: 1)!
 
         engine.attach(player)
         engine.connect(player, to: engine.mainMixerNode, format: format)
@@ -435,18 +525,18 @@ class SpeechEngine: NSObject, ObservableObject {
 
                     log.info("Generating sentence \(i+1)/\(sentences.count) (\(trimmed.count) chars)")
 
-                    let params = GenerateParameters()
+                    let params = model.defaultGenerationParameters
                     let audio = try await model.generate(
                         text: trimmed,
-                        voice: self.selectedVoice,
+                        voice: self.voiceParameter(for: self.selectedSpeechModel),
                         refAudio: nil,
                         refText: nil,
-                        language: "en-us",
+                        language: self.selectedSpeechModel.language,
                         generationParameters: params
                     )
 
                     let samples = audio.asArray(Float.self)
-                    let chunkAudioSeconds = Double(samples.count) / Self.sampleRate
+                    let chunkAudioSeconds = Double(samples.count) / self.playbackSampleRate
                     generatedAudioSeconds += chunkAudioSeconds
                     generatedTextChars += trimmed.count
 
@@ -771,7 +861,14 @@ class SpeechEngine: NSObject, ObservableObject {
             state = .playing
             log.info("Playback resumed with \(String(format: "%.2f", self.bufferedAudioSeconds()), privacy: .public)s buffered")
         }
-        log.info("Scheduled streaming chunk \(self.playbackChunksScheduled, privacy: .public): \(String(format: "%.2f", Double(samples.count) / Self.sampleRate), privacy: .public)s audio")
+        log.info("Scheduled streaming chunk \(self.playbackChunksScheduled, privacy: .public): \(String(format: "%.2f", Double(samples.count) / self.playbackSampleRate), privacy: .public)s audio")
+    }
+
+    private func voiceParameter(for preset: SpeechModelPreset) -> String? {
+        if preset.supportsKokoroVoices {
+            return selectedVoice
+        }
+        return preset.voicePrompt
     }
 
     private func setupAudioEngine() -> Bool {
@@ -779,7 +876,7 @@ class SpeechEngine: NSObject, ObservableObject {
         let player = AVAudioPlayerNode()
         let timePitch = AVAudioUnitTimePitch()
         timePitch.rate = Float(speed)
-        let format = AVAudioFormat(standardFormatWithSampleRate: Self.sampleRate, channels: 1)!
+        let format = AVAudioFormat(standardFormatWithSampleRate: playbackSampleRate, channels: 1)!
 
         engine.attach(player)
         engine.attach(timePitch)
@@ -811,8 +908,8 @@ class SpeechEngine: NSObject, ObservableObject {
         progressTask?.cancel()
         progressTask = Task { @MainActor in
             while !Task.isCancelled && (state == .generating || state == .playing || state == .paused) {
-                let playedSeconds = Double(seekSampleOffset) / Self.sampleRate + currentPlaybackSourceSeconds()
-                let totalSeconds = max(totalEstimatedAudioSeconds(), Double(totalSamplesScheduled) / Self.sampleRate)
+                let playedSeconds = Double(seekSampleOffset) / playbackSampleRate + currentPlaybackSourceSeconds()
+                let totalSeconds = max(totalEstimatedAudioSeconds(), Double(totalSamplesScheduled) / playbackSampleRate)
                 if totalSeconds > 0 {
                     progress = min(playedSeconds / totalSeconds, 0.99)
                 }
@@ -827,13 +924,13 @@ class SpeechEngine: NSObject, ObservableObject {
               let playerTime = player.playerTime(forNodeTime: nodeTime) else {
             return 0
         }
-        return max(Double(playerTime.sampleTime) / Self.sampleRate, 0)
+        return max(Double(playerTime.sampleTime) / playbackSampleRate, 0)
     }
 
     private func bufferedAudioSeconds() -> Double {
         let generatedSamples = accumulatedSamples.isEmpty ? totalSamplesScheduled : accumulatedSamples.count
         let remainingSamples = max(generatedSamples - seekSampleOffset, 0)
-        return max(Double(remainingSamples) / Self.sampleRate - currentPlaybackSourceSeconds(), 0)
+        return max(Double(remainingSamples) / playbackSampleRate - currentPlaybackSourceSeconds(), 0)
     }
 
     private func resumeBufferTargetSeconds() -> Double {
@@ -915,14 +1012,14 @@ class SpeechEngine: NSObject, ObservableObject {
 
     func skipBackward(_ seconds: Double = 15) {
         guard state == .playing || state == .paused, !accumulatedSamples.isEmpty else { return }
-        let currentSample = seekSampleOffset + Int(currentPlaybackSourceSeconds() * Self.sampleRate)
-        seekTo(sample: max(0, currentSample - Int(seconds * Self.sampleRate)))
+        let currentSample = seekSampleOffset + Int(currentPlaybackSourceSeconds() * playbackSampleRate)
+        seekTo(sample: max(0, currentSample - Int(seconds * playbackSampleRate)))
     }
 
     func skipForward(_ seconds: Double = 15) {
         guard state == .playing || state == .paused, !accumulatedSamples.isEmpty else { return }
-        let currentSample = seekSampleOffset + Int(currentPlaybackSourceSeconds() * Self.sampleRate)
-        let target = min(currentSample + Int(seconds * Self.sampleRate), accumulatedSamples.count - 1)
+        let currentSample = seekSampleOffset + Int(currentPlaybackSourceSeconds() * playbackSampleRate)
+        let target = min(currentSample + Int(seconds * playbackSampleRate), accumulatedSamples.count - 1)
         guard target > currentSample else { return }
         seekTo(sample: target)
     }
