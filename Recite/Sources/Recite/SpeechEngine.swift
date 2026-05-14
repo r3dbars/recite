@@ -469,7 +469,7 @@ class SpeechEngine: NSObject, ObservableObject {
 
                     await MainActor.run {
                         guard self.generationID == myGenID else { return }
-                        self.scheduleStreamingAudio(samples, isFinalChunk: false)
+                        self.scheduleStreamingAudio(samples, isFinalChunk: i == sentences.count - 1)
                         self.progress = min(Double(i + 1) / Double(sentences.count), 0.98)
 
                         guard shouldStartPlayback, !playbackHasStarted else { return }
@@ -766,7 +766,7 @@ class SpeechEngine: NSObject, ObservableObject {
         if streamingPlaybackStarted,
            state != .paused,
            !player.isPlaying,
-           bufferedAudioSeconds() >= resumeBufferTargetSeconds() {
+           (streamingGenerationComplete || bufferedAudioSeconds() >= resumeBufferTargetSeconds()) {
             player.play()
             state = .playing
             log.info("Playback resumed with \(String(format: "%.2f", self.bufferedAudioSeconds()), privacy: .public)s buffered")
@@ -831,7 +831,9 @@ class SpeechEngine: NSObject, ObservableObject {
     }
 
     private func bufferedAudioSeconds() -> Double {
-        max(Double(totalSamplesScheduled) / Self.sampleRate - currentPlaybackSourceSeconds(), 0)
+        let generatedSamples = accumulatedSamples.isEmpty ? totalSamplesScheduled : accumulatedSamples.count
+        let remainingSamples = max(generatedSamples - seekSampleOffset, 0)
+        return max(Double(remainingSamples) / Self.sampleRate - currentPlaybackSourceSeconds(), 0)
     }
 
     private func resumeBufferTargetSeconds() -> Double {
@@ -934,7 +936,8 @@ class SpeechEngine: NSObject, ObservableObject {
         player.stop()
 
         seekSampleOffset = clamped
-        streamingGenerationComplete = true
+        playbackChunksScheduled = 0
+        playbackChunksCompleted = 0
 
         let remainingCount = accumulatedSamples.count - clamped
         guard remainingCount > 0 else { return }
@@ -950,12 +953,20 @@ class SpeechEngine: NSObject, ObservableObject {
 
         let expectedGenID = generationID
         let expectedPlaybackID = playbackID
+        playbackChunksScheduled += 1
         player.scheduleBuffer(buffer) { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
                 guard self.generationID == expectedGenID else { return }
                 guard self.playbackID == expectedPlaybackID else { return }
-                self.finishPlayback()
+                self.playbackChunksCompleted += 1
+                if !self.streamingGenerationComplete,
+                   self.streamingPlaybackStarted,
+                   self.playbackChunksCompleted >= self.playbackChunksScheduled {
+                    self.state = .generating
+                    log.info("Seek buffer drained before generation finished; waiting for the next chunk")
+                }
+                self.finishPlaybackIfComplete()
             }
         }
 
