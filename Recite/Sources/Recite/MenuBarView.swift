@@ -1246,33 +1246,40 @@ struct SettingsDetailView: View {
                     }
                 }
 
-                if engine.selectedSpeechModel.supportsKokoroVoices {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Label("Voices", systemImage: "mic")
-                                .font(.system(size: 16, weight: .semibold))
-                            Spacer()
-                            if engine.previewingVoice != nil {
-                                Button {
-                                    engine.stopVoicePreview()
-                                } label: {
-                                    Label("Stop", systemImage: "stop.fill")
-                                }
-                                .controlSize(.small)
-                            }
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Label("\(engine.selectedSpeechModel.name) Voices", systemImage: "mic")
+                            .font(.system(size: 16, weight: .semibold))
+                        Spacer()
+                        if !engine.selectedSpeechModel.supportsKokoroVoices {
+                            StatusPill(
+                                title: "Samples",
+                                systemImage: "play.circle.fill",
+                                color: .blue
+                            )
                         }
-
-                        VStack(spacing: 8) {
-                            ForEach(SpeechEngine.voicePresets) { preset in
-                                VoiceChoiceRow(
-                                    preset: preset,
-                                    isSelected: engine.selectedVoice == preset.kokoroVoice,
-                                    isPreviewing: engine.previewingVoice == preset.kokoroVoice,
-                                    canPreview: engine.modelStatus == .ready && engine.state == .idle,
-                                    select: { engine.selectedVoice = preset.kokoroVoice },
-                                    preview: { engine.previewVoice(preset) }
-                                )
+                        if engine.previewingVoice != nil {
+                            Button {
+                                engine.stopVoicePreview()
+                            } label: {
+                                Label("Stop", systemImage: "stop.fill")
                             }
+                            .controlSize(.small)
+                        }
+                    }
+
+                    VStack(spacing: 8) {
+                        ForEach(SpeechEngine.voicePresets(for: engine.selectedSpeechModel.voiceFamily)) { preset in
+                            VoiceChoiceRow(
+                                preset: preset,
+                                isSelected: engine.selectedVoice == preset.voiceID,
+                                isPreviewing: engine.previewingVoice == preset.id,
+                                canPreview: engine.canPreview(preset),
+                                showsPreview: preset.modelFamily.supportsVoiceSamples,
+                                unavailableReason: preset.modelFamily.sampleUnavailableReason,
+                                select: { engine.selectVoice(preset) },
+                                preview: { engine.previewVoice(preset) }
+                            )
                         }
                     }
                 }
@@ -1332,6 +1339,8 @@ private struct VoiceChoiceRow: View {
     let isSelected: Bool
     let isPreviewing: Bool
     let canPreview: Bool
+    let showsPreview: Bool
+    let unavailableReason: String?
     let select: () -> Void
     let preview: () -> Void
 
@@ -1351,6 +1360,11 @@ private struct VoiceChoiceRow: View {
                         Text(voiceDescription)
                             .font(.system(size: 11))
                             .foregroundColor(.secondary)
+                        Text("\"\(preset.sampleText)\"")
+                            .font(.system(size: 11))
+                            .foregroundColor(.secondary.opacity(0.9))
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
 
                     Spacer()
@@ -1359,14 +1373,21 @@ private struct VoiceChoiceRow: View {
             }
             .buttonStyle(.plain)
 
-            Button(action: preview) {
-                Label(isPreviewing ? "Stop" : "Preview",
-                      systemImage: isPreviewing ? "stop.fill" : "play.fill")
-                    .font(.system(size: 12, weight: .semibold))
-                    .frame(width: 84)
+            if showsPreview {
+                Button(action: preview) {
+                    Label(isPreviewing ? "Stop" : "Sample",
+                          systemImage: isPreviewing ? "stop.fill" : "play.fill")
+                        .font(.system(size: 12, weight: .semibold))
+                        .frame(width: 84)
+                }
+                .controlSize(.small)
+                .disabled(!canPreview && !isPreviewing)
+            } else if let unavailableReason {
+                Text(unavailableReason)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .frame(width: 112, alignment: .trailing)
             }
-            .controlSize(.small)
-            .disabled(!canPreview && !isPreviewing)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
@@ -1384,11 +1405,7 @@ private struct VoiceChoiceRow: View {
     }
 
     private var voiceDescription: String {
-        let locale = preset.kokoroVoice.hasPrefix("b") ? "British" : "American"
-        let tone = preset.kokoroVoice.hasPrefix("a") || preset.kokoroVoice.hasPrefix("b")
-            ? "English"
-            : "Voice"
-        return "\(locale) \(tone) · \(preset.kokoroVoice)"
+        preset.detail
     }
 }
 

@@ -8,15 +8,128 @@ import os.log
 
 private let log = Logger(subsystem: "com.r3dbars.recite", category: "SpeechEngine")
 
+enum VoiceModelFamily: String, CaseIterable, Identifiable {
+    case kokoro
+    case qwen
+    case chatterbox
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .kokoro: return "Kokoro"
+        case .qwen: return "Qwen"
+        case .chatterbox: return "Chatterbox"
+        }
+    }
+
+    var supportsVoiceSamples: Bool {
+        true
+    }
+
+    var sampleUnavailableReason: String? {
+        nil
+    }
+}
+
 struct VoicePreset: Identifiable, Hashable {
     let name: String
-    let kokoroVoice: String
+    let voiceID: String
+    let modelFamily: VoiceModelFamily
+    let detail: String
 
-    var id: String { kokoroVoice }
+    var id: String { "\(modelFamily.rawValue):\(voiceID)" }
+
+    var kokoroVoice: String { voiceID }
+
+    var sampleText: String {
+        switch modelFamily {
+        case .kokoro:
+            switch voiceID {
+            case "af_heart": return "A calm voice for long articles and notes."
+            case "af_bella": return "Soft and clear, with a little warmth."
+            case "af_sky": return "Bright, steady, and easy to follow."
+            case "af_nicole": return "A gentle voice for focused reading."
+            case "af_sarah": return "Clean narration for emails and essays."
+            case "af_nova": return "Modern and crisp, good for quick reads."
+            case "af_river": return "Relaxed pacing for longer passages."
+            case "am_adam": return "A grounded voice for plain spoken text."
+            case "am_michael": return "Confident narration with a clear tone."
+            case "am_eric": return "Direct and simple, good for short notes."
+            case "am_liam": return "Light, natural, and conversational."
+            case "bf_alice": return "A British voice for clear narration."
+            case "bm_daniel": return "A steady British voice for longer reads."
+            default: return "Recite can read selected text aloud on your Mac."
+            }
+        case .qwen:
+            switch voiceID {
+            case "Vivian": return "Hello, I am Vivian. This is a quick Recite voice sample."
+            case "Serena": return "Hello, I am Serena. This is a quick Recite voice sample."
+            case "Uncle_Fu": return "Hello, I am Uncle Fu. This is a quick Recite voice sample."
+            case "Dylan": return "Hello, I am Dylan. This is a quick Recite voice sample."
+            case "Eric": return "Hello, I am Eric. This is a quick Recite voice sample."
+            case "Ryan": return "Hello, I am Ryan. This is a quick Recite voice sample."
+            case "Aiden": return "Hello, I am Aiden. This is a quick Recite voice sample."
+            case "Ono_Anna": return "Hello, I am Ono Anna. This is a quick Recite voice sample."
+            case "Sohee": return "Hello, I am Sohee. This is a quick Recite voice sample."
+            default: return "This Qwen voice can be used for local speech."
+            }
+        case .chatterbox:
+            switch voiceID {
+            case "default": return "A neutral Chatterbox sample voice."
+            case "reference": return "This uses your saved reference voice."
+            case "expressive": return "A more animated Chatterbox reading."
+            default: return "This Chatterbox voice uses a reference sample."
+            }
+        }
+    }
+
+    var sampleLanguage: String {
+        switch modelFamily {
+        case .kokoro: return "en-us"
+        case .qwen: return "English"
+        case .chatterbox: return "en"
+        }
+    }
+
+    var generationVoicePrompt: String? {
+        switch modelFamily {
+        case .kokoro:
+            return voiceID
+        case .qwen:
+            switch voiceID {
+            case "Vivian": return "Bright young female voice speaking English clearly and warmly."
+            case "Serena": return "Warm gentle young female voice speaking English, soft and calm."
+            case "Uncle_Fu": return "Seasoned older male voice speaking English with a mellow low tone."
+            case "Dylan": return "Youthful male voice speaking English, crisp and clear."
+            case "Eric": return "Lively male voice speaking English with upbeat energy."
+            case "Ryan": return "Dynamic English male voice with rhythm and energy."
+            case "Aiden": return "Sunny American male voice, friendly and easygoing."
+            case "Ono_Anna": return "Playful Japanese female voice speaking English, bright and expressive."
+            case "Sohee": return "Warm Korean female voice speaking English, gentle and clear."
+            default: return nil
+            }
+        case .chatterbox:
+            return nil
+        }
+    }
+
+    var bundledSampleName: String? {
+        switch modelFamily {
+        case .kokoro:
+            return nil
+        case .qwen:
+            return "qwen_\(voiceID)"
+        case .chatterbox:
+            return "chatterbox_\(voiceID)"
+        }
+    }
 
     static let defaultPreset = VoicePreset(
         name: "Heart",
-        kokoroVoice: "af_heart"
+        voiceID: "af_heart",
+        modelFamily: .kokoro,
+        detail: "American English · af_heart"
     )
 }
 
@@ -31,6 +144,7 @@ struct SpeechModelPreset: Identifiable, Hashable {
     let voicePrompt: String?
     let supportsKokoroVoices: Bool
     let requiresEspeakTextProcessor: Bool
+    let voiceFamily: VoiceModelFamily
 
     var pickerTitle: String {
         "\(name) (\(badge))"
@@ -46,7 +160,8 @@ struct SpeechModelPreset: Identifiable, Hashable {
         language: "en-us",
         voicePrompt: nil,
         supportsKokoroVoices: true,
-        requiresEspeakTextProcessor: true
+        requiresEspeakTextProcessor: true,
+        voiceFamily: .kokoro
     )
 
     static let qwen3 = SpeechModelPreset(
@@ -59,7 +174,8 @@ struct SpeechModelPreset: Identifiable, Hashable {
         language: "English",
         voicePrompt: nil,
         supportsKokoroVoices: false,
-        requiresEspeakTextProcessor: false
+        requiresEspeakTextProcessor: false,
+        voiceFamily: .qwen
     )
 
     static let chatterbox = SpeechModelPreset(
@@ -72,7 +188,8 @@ struct SpeechModelPreset: Identifiable, Hashable {
         language: nil,
         voicePrompt: nil,
         supportsKokoroVoices: false,
-        requiresEspeakTextProcessor: false
+        requiresEspeakTextProcessor: false,
+        voiceFamily: .chatterbox
     )
 }
 
@@ -201,8 +318,7 @@ class SpeechEngine: NSObject, ObservableObject {
         }
     }
     @Published var previewingVoice: String?
-    @Published var selectedSpeechModelID: String = UserDefaults.standard.string(forKey: "selectedSpeechModelID")
-        ?? SpeechModelPreset.kokoro.id {
+    @Published var selectedSpeechModelID: String = SpeechEngine.savedSpeechModelID() {
         didSet {
             guard selectedSpeechModelID != oldValue else { return }
             guard Self.speechModels.contains(where: { $0.id == selectedSpeechModelID }) else {
@@ -211,7 +327,9 @@ class SpeechEngine: NSObject, ObservableObject {
             }
 
             log.info("Speech model changed to: \(self.selectedSpeechModelID)")
-            UserDefaults.standard.set(selectedSpeechModelID, forKey: "selectedSpeechModelID")
+            UserDefaults.standard.set(selectedSpeechModelID, forKey: Self.selectedSpeechModelKey)
+            stopVoicePreview()
+            selectedVoice = Self.savedVoiceID(for: selectedSpeechModel.voiceFamily)
             stop()
             model = nil
             loadedSpeechModelID = nil
@@ -219,33 +337,42 @@ class SpeechEngine: NSObject, ObservableObject {
             Task { await self.loadModel() }
         }
     }
-    @Published var selectedVoice: String = UserDefaults.standard.string(forKey: "selectedVoice")
-        ?? VoicePreset.defaultPreset.kokoroVoice {
-        didSet {
-            log.info("Voice changed to: \(self.selectedVoice)")
-            UserDefaults.standard.set(selectedVoice, forKey: "selectedVoice")
-            guard state == .playing || state == .paused || state == .generating else { return }
-            let textToRepeat = currentText.isEmpty ? ReadingQueue.shared.currentItem?.text : currentText
-            if let text = textToRepeat {
-                speak(text)
-            }
-        }
-    }
+    @Published private(set) var selectedVoice: String = SpeechEngine.savedVoiceID(
+        for: SpeechEngine.savedSpeechModel().voiceFamily
+    )
 
     static let voicePresets: [VoicePreset] = [
-        VoicePreset(name: "Heart", kokoroVoice: "af_heart"),
-        VoicePreset(name: "Bella", kokoroVoice: "af_bella"),
-        VoicePreset(name: "Sky", kokoroVoice: "af_sky"),
-        VoicePreset(name: "Nicole", kokoroVoice: "af_nicole"),
-        VoicePreset(name: "Sarah", kokoroVoice: "af_sarah"),
-        VoicePreset(name: "Nova", kokoroVoice: "af_nova"),
-        VoicePreset(name: "River", kokoroVoice: "af_river"),
-        VoicePreset(name: "Adam", kokoroVoice: "am_adam"),
-        VoicePreset(name: "Michael", kokoroVoice: "am_michael"),
-        VoicePreset(name: "Eric", kokoroVoice: "am_eric"),
-        VoicePreset(name: "Liam", kokoroVoice: "am_liam"),
-        VoicePreset(name: "Alice (British)", kokoroVoice: "bf_alice"),
-        VoicePreset(name: "Daniel (British)", kokoroVoice: "bm_daniel"),
+        VoicePreset(name: "Heart", voiceID: "af_heart", modelFamily: .kokoro, detail: "American English · af_heart"),
+        VoicePreset(name: "Bella", voiceID: "af_bella", modelFamily: .kokoro, detail: "American English · af_bella"),
+        VoicePreset(name: "Sky", voiceID: "af_sky", modelFamily: .kokoro, detail: "American English · af_sky"),
+        VoicePreset(name: "Nicole", voiceID: "af_nicole", modelFamily: .kokoro, detail: "American English · af_nicole"),
+        VoicePreset(name: "Sarah", voiceID: "af_sarah", modelFamily: .kokoro, detail: "American English · af_sarah"),
+        VoicePreset(name: "Nova", voiceID: "af_nova", modelFamily: .kokoro, detail: "American English · af_nova"),
+        VoicePreset(name: "River", voiceID: "af_river", modelFamily: .kokoro, detail: "American English · af_river"),
+        VoicePreset(name: "Adam", voiceID: "am_adam", modelFamily: .kokoro, detail: "American English · am_adam"),
+        VoicePreset(name: "Michael", voiceID: "am_michael", modelFamily: .kokoro, detail: "American English · am_michael"),
+        VoicePreset(name: "Eric", voiceID: "am_eric", modelFamily: .kokoro, detail: "American English · am_eric"),
+        VoicePreset(name: "Liam", voiceID: "am_liam", modelFamily: .kokoro, detail: "American English · am_liam"),
+        VoicePreset(name: "Alice (British)", voiceID: "bf_alice", modelFamily: .kokoro, detail: "British English · bf_alice"),
+        VoicePreset(name: "Daniel (British)", voiceID: "bm_daniel", modelFamily: .kokoro, detail: "British English · bm_daniel"),
+    ]
+
+    static let qwenVoicePresets: [VoicePreset] = [
+        VoicePreset(name: "Vivian", voiceID: "Vivian", modelFamily: .qwen, detail: "Bright young voice"),
+        VoicePreset(name: "Serena", voiceID: "Serena", modelFamily: .qwen, detail: "Warm young voice"),
+        VoicePreset(name: "Uncle Fu", voiceID: "Uncle_Fu", modelFamily: .qwen, detail: "Low seasoned voice"),
+        VoicePreset(name: "Dylan", voiceID: "Dylan", modelFamily: .qwen, detail: "Clear Beijing voice"),
+        VoicePreset(name: "Eric", voiceID: "Eric", modelFamily: .qwen, detail: "Lively Chengdu voice"),
+        VoicePreset(name: "Ryan", voiceID: "Ryan", modelFamily: .qwen, detail: "Dynamic English voice"),
+        VoicePreset(name: "Aiden", voiceID: "Aiden", modelFamily: .qwen, detail: "Sunny American voice"),
+        VoicePreset(name: "Ono Anna", voiceID: "Ono_Anna", modelFamily: .qwen, detail: "Playful Japanese voice"),
+        VoicePreset(name: "Sohee", voiceID: "Sohee", modelFamily: .qwen, detail: "Warm Korean voice"),
+    ]
+
+    static let chatterboxVoicePresets: [VoicePreset] = [
+        VoicePreset(name: "Default", voiceID: "default", modelFamily: .chatterbox, detail: "Built-in fallback voice"),
+        VoicePreset(name: "Reference Voice", voiceID: "reference", modelFamily: .chatterbox, detail: "Use a saved reference clip"),
+        VoicePreset(name: "Expressive", voiceID: "expressive", modelFamily: .chatterbox, detail: "Higher emotion setting"),
     ]
 
     static let defaultSpeechModel = SpeechModelPreset.kokoro
@@ -283,15 +410,93 @@ class SpeechEngine: NSObject, ObservableObject {
     private var previewTask: Task<Void, Never>?
     private var previewAudioEngine: AVAudioEngine?
     private var previewPlayerNode: AVAudioPlayerNode?
+    private var previewFilePlayer: AVAudioPlayer?
+    private var previewFileTask: Task<Void, Never>?
 
     private var playbackSampleRate: Double = 24000
     private static let fastEnoughMargin = 1.15
     private static let minimumStartupBufferSeconds = 1.25
     private static let comfortableStartupBufferSeconds = 3.0
     private static let lowWaterWallSeconds = 2.5
+    private static let selectedSpeechModelKey = "selectedSpeechModelID"
+    private static let legacySelectedVoiceKey = "selectedVoice"
 
     override init() {
         super.init()
+    }
+
+    static func voicePresets(for modelFamily: VoiceModelFamily) -> [VoicePreset] {
+        switch modelFamily {
+        case .kokoro: return voicePresets
+        case .qwen: return qwenVoicePresets
+        case .chatterbox: return chatterboxVoicePresets
+        }
+    }
+
+    func selectVoice(_ preset: VoicePreset) {
+        guard preset.modelFamily == selectedSpeechModel.voiceFamily else { return }
+        guard selectedVoice != preset.voiceID else { return }
+        stopVoicePreview()
+        selectedVoice = preset.voiceID
+        persistSelectedVoice(for: preset.modelFamily)
+        log.info("Voice changed to: \(self.selectedVoice)")
+        restartPlaybackIfNeeded(for: preset.modelFamily)
+    }
+
+    func canPreview(_ preset: VoicePreset) -> Bool {
+        guard preset.modelFamily.supportsVoiceSamples else { return false }
+        guard state == .idle else { return false }
+        if bundledSampleURL(for: preset) != nil {
+            return true
+        }
+        guard preset.modelFamily == .kokoro else { return false }
+        return selectedSpeechModel.voiceFamily == .kokoro && modelStatus == .ready
+    }
+
+    private static func savedSpeechModelID() -> String {
+        let saved = UserDefaults.standard.string(forKey: selectedSpeechModelKey)
+        guard let saved, speechModels.contains(where: { $0.id == saved }) else {
+            return defaultSpeechModel.id
+        }
+        return saved
+    }
+
+    private static func savedSpeechModel() -> SpeechModelPreset {
+        let savedID = savedSpeechModelID()
+        return speechModels.first { $0.id == savedID } ?? defaultSpeechModel
+    }
+
+    private static func voiceDefaultsKey(for modelFamily: VoiceModelFamily) -> String {
+        "selectedVoice.\(modelFamily.rawValue)"
+    }
+
+    private static func savedVoiceID(for modelFamily: VoiceModelFamily) -> String {
+        let saved = UserDefaults.standard.string(forKey: voiceDefaultsKey(for: modelFamily))
+        let legacySaved = modelFamily == .kokoro
+            ? UserDefaults.standard.string(forKey: legacySelectedVoiceKey)
+            : nil
+        let fallback = voicePresets(for: modelFamily).first?.voiceID ?? VoicePreset.defaultPreset.voiceID
+        let candidate = saved ?? legacySaved ?? fallback
+        guard voicePresets(for: modelFamily).contains(where: { $0.voiceID == candidate }) else {
+            return fallback
+        }
+        return candidate
+    }
+
+    private func persistSelectedVoice(for modelFamily: VoiceModelFamily) {
+        UserDefaults.standard.set(selectedVoice, forKey: Self.voiceDefaultsKey(for: modelFamily))
+        if modelFamily == .kokoro {
+            UserDefaults.standard.set(selectedVoice, forKey: Self.legacySelectedVoiceKey)
+        }
+    }
+
+    private func restartPlaybackIfNeeded(for modelFamily: VoiceModelFamily) {
+        guard state == .playing || state == .paused || state == .generating else { return }
+        guard modelFamily == selectedSpeechModel.voiceFamily else { return }
+        let textToRepeat = currentText.isEmpty ? ReadingQueue.shared.currentItem?.text : currentText
+        if let text = textToRepeat {
+            speak(text)
+        }
     }
 
     // MARK: - Model Loading
@@ -363,41 +568,60 @@ class SpeechEngine: NSObject, ObservableObject {
     // MARK: - Voice Preview
 
     func previewVoice(_ preset: VoicePreset) {
-        if previewingVoice == preset.kokoroVoice {
+        guard preset.modelFamily.supportsVoiceSamples else {
+            log.warning("previewVoice() called for unavailable model \(preset.modelFamily.rawValue)")
+            return
+        }
+
+        if previewingVoice == preset.id {
             stopVoicePreview()
+            return
+        }
+
+        guard canPreview(preset) else {
+            log.warning("previewVoice() called but sample is not ready")
+            return
+        }
+
+        stopVoicePreview()
+        previewingVoice = preset.id
+
+        if let sampleURL = bundledSampleURL(for: preset) {
+            playBundledVoicePreview(sampleURL, previewID: preset.id)
             return
         }
 
         guard modelStatus == .ready, let model else {
             log.warning("previewVoice() called but model not ready")
+            stopVoicePreview()
             return
         }
-
-        stopVoicePreview()
-        previewingVoice = preset.kokoroVoice
 
         previewTask = Task {
             do {
                 let params = model.defaultGenerationParameters
-                let sampleText = "Hello from \(preset.name), Recite can read articles, emails, and notes out loud"
                 let audio = try await model.generate(
-                    text: sampleText,
-                    voice: preset.kokoroVoice,
+                    text: preset.sampleText,
+                    voice: preset.generationVoicePrompt,
                     refAudio: nil,
                     refText: nil,
-                    language: selectedSpeechModel.language,
+                    language: preset.sampleLanguage,
                     generationParameters: params
                 )
                 if Task.isCancelled { return }
                 let samples = audio.asArray(Float.self)
                 await MainActor.run {
-                    guard self.previewingVoice == preset.kokoroVoice else { return }
-                    self.playVoicePreview(samples, voiceID: preset.kokoroVoice)
+                    guard self.previewingVoice == preset.id else { return }
+                    self.playVoicePreview(
+                        samples,
+                        previewID: preset.id,
+                        sampleRate: Double(model.sampleRate)
+                    )
                 }
             } catch {
                 log.error("Voice preview failed: \(error.localizedDescription)")
                 await MainActor.run {
-                    guard self.previewingVoice == preset.kokoroVoice else { return }
+                    guard self.previewingVoice == preset.id else { return }
                     self.stopVoicePreview()
                 }
             }
@@ -407,6 +631,10 @@ class SpeechEngine: NSObject, ObservableObject {
     func stopVoicePreview() {
         previewTask?.cancel()
         previewTask = nil
+        previewFileTask?.cancel()
+        previewFileTask = nil
+        previewFilePlayer?.stop()
+        previewFilePlayer = nil
         previewPlayerNode?.stop()
         previewAudioEngine?.stop()
         previewPlayerNode = nil
@@ -414,10 +642,41 @@ class SpeechEngine: NSObject, ObservableObject {
         previewingVoice = nil
     }
 
-    private func playVoicePreview(_ samples: [Float], voiceID: String) {
+    private func bundledSampleURL(for preset: VoicePreset) -> URL? {
+        guard let sampleName = preset.bundledSampleName else { return nil }
+        return Bundle.main.url(
+            forResource: sampleName,
+            withExtension: "wav",
+            subdirectory: "VoiceSamples"
+        )
+    }
+
+    private func playBundledVoicePreview(_ url: URL, previewID: String) {
+        do {
+            let player = try AVAudioPlayer(contentsOf: url)
+            previewFilePlayer = player
+            player.prepareToPlay()
+            player.play()
+
+            let duration = max(player.duration, 0.1)
+            previewFileTask = Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(duration * 1_000_000_000))
+                await MainActor.run {
+                    guard let self, self.previewingVoice == previewID else { return }
+                    self.stopVoicePreview()
+                }
+            }
+            log.info("Bundled voice preview started for \(previewID)")
+        } catch {
+            log.error("Bundled voice preview failed: \(error.localizedDescription)")
+            stopVoicePreview()
+        }
+    }
+
+    private func playVoicePreview(_ samples: [Float], previewID: String, sampleRate: Double) {
         let engine = AVAudioEngine()
         let player = AVAudioPlayerNode()
-        let format = AVAudioFormat(standardFormatWithSampleRate: playbackSampleRate, channels: 1)!
+        let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
 
         engine.attach(player)
         engine.connect(player, to: engine.mainMixerNode, format: format)
@@ -439,12 +698,12 @@ class SpeechEngine: NSObject, ObservableObject {
             previewPlayerNode = player
             player.scheduleBuffer(buffer) { [weak self] in
                 Task { @MainActor in
-                    guard let self, self.previewingVoice == voiceID else { return }
+                    guard let self, self.previewingVoice == previewID else { return }
                     self.stopVoicePreview()
                 }
             }
             player.play()
-            log.info("Voice preview started for \(voiceID)")
+            log.info("Voice preview started for \(previewID)")
         } catch {
             log.error("Voice preview audio failed: \(error.localizedDescription)")
             stopVoicePreview()
@@ -868,7 +1127,9 @@ class SpeechEngine: NSObject, ObservableObject {
         if preset.supportsKokoroVoices {
             return selectedVoice
         }
-        return preset.voicePrompt
+        return Self.voicePresets(for: preset.voiceFamily)
+            .first { $0.voiceID == selectedVoice }?
+            .generationVoicePrompt ?? preset.voicePrompt
     }
 
     private func setupAudioEngine() -> Bool {
