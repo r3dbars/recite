@@ -1,68 +1,41 @@
 # Recite
 
+[![Build](https://github.com/r3dbars/recite/actions/workflows/build.yml/badge.svg)](https://github.com/r3dbars/recite/actions/workflows/build.yml)
+[![Latest release](https://img.shields.io/github/v/release/r3dbars/recite)](https://github.com/r3dbars/recite/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 ![Recite title image](docs/assets/recite-title.png)
 
-Recite is a small Mac app that gives your computer a local AI voice.
+Select text in any app, press **Control + Option + R**, and Recite reads it aloud on your Mac. Local AI voices. No cloud voice API. No per-minute bill. No sending your reading material to a server.
 
-Think of it like text-to-speech you can run yourself. Select text in any app, press **Control + Option + R**, and Recite reads it back out loud. Articles, docs, emails, notes, long messages - anything you can select.
+**[Download the latest DMG](https://github.com/r3dbars/recite/releases/latest)**
 
-The simple idea: your Mac turns text into speech using its own hardware. No cloud voice API. No per-minute bill. No sending your private reading material to a server.
+![Recite app window](docs/assets/recite-screenshot.png)
 
-![Recite app window showing local text-to-speech controls](docs/assets/recite-screenshot.png)
+## Why Recite
 
-## What Is Text-To-Speech?
-
-Text-to-speech means software reads written words out loud.
-
-Old text-to-speech sounded robotic. Newer AI voice models can sound much more natural. A lot of tools do this in the cloud with paid services, like ElevenLabs-style voice APIs.
-
-Recite does it locally instead. It downloads a small AI voice model once, then uses your Mac to generate the audio.
-
-## Why Use Recite?
-
-- Read long articles back to you for free.
-- Listen to docs, emails, notes, and web pages while you do something else.
-- Use local AI voices without paying for a cloud voice service.
+- Read articles, docs, emails, and notes while you do something else.
 - Keep selected text and generated audio on your Mac.
-- Start reading from a global hotkey or the menu bar.
-- Queue text, replay history, choose a voice, and adjust speed.
+- Queue text, replay history, pick a voice, and change speed.
+- Start from a global hotkey or the menu bar.
 
 ## How It Works
 
 1. You select text.
 2. Recite grabs that selected text.
-3. A local AI voice model turns the text into audio.
-4. Your Mac plays the audio back.
+3. A local MLX voice model turns the text into audio.
+4. Your Mac plays it back.
 
-Recite defaults to Kokoro 82M and can also use other local MLX voice models on Apple Silicon Macs.
+Recite defaults to [Kokoro-82M-bf16](https://huggingface.co/mlx-community/Kokoro-82M-bf16). Settings can switch to Qwen3-TTS or Chatterbox Turbo. Kokoro ships 13 English voice presets (Heart is the default), plus bundled samples for the other models.
 
-## Model And Voices
+## Privacy
 
-Recite defaults to [Kokoro-82M-bf16](https://huggingface.co/mlx-community/Kokoro-82M-bf16), an MLX conversion of [hexgrad/Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M). You can switch models in Settings.
+- Selected text stays on your Mac. Recite does not send it, or the generated audio, to a server.
+- The copy fallback restores your clipboard after it runs.
+- Reading history is stored locally in macOS user defaults and can be cleared in the app.
+- The selected voice model downloads once from Hugging Face.
 
-Current model choices:
-
-- Kokoro 82M: `mlx-community/Kokoro-82M-bf16`
-- Qwen3-TTS: `mlx-community/Qwen3-TTS-12Hz-0.6B-Base-8bit`
-- Chatterbox Turbo: `mlx-community/chatterbox-turbo-4bit`
-
-Recite includes 13 English voice presets:
-
-| Name | Voice ID | Accent |
-| --- | --- | --- |
-| Heart | `af_heart` | American female |
-| Bella | `af_bella` | American female |
-| Sky | `af_sky` | American female |
-| Nicole | `af_nicole` | American female |
-| Sarah | `af_sarah` | American female |
-| Nova | `af_nova` | American female |
-| River | `af_river` | American female |
-| Adam | `am_adam` | American male |
-| Michael | `am_michael` | American male |
-| Eric | `am_eric` | American male |
-| Liam | `am_liam` | American male |
-| Alice | `bf_alice` | British female |
-| Daniel | `bm_daniel` | British male |
+See [SECURITY.md](SECURITY.md) to report a vulnerability privately. Do not open a public security issue.
 
 ## Requirements
 
@@ -70,25 +43,21 @@ Recite includes 13 English voice presets:
 - Apple Silicon Mac
 - No Homebrew install is needed for the DMG download.
 
-## Download
-
-Download the latest DMG from [GitHub Releases](https://github.com/r3dbars/recite/releases/latest).
-
-Recite is just starting out. If there is not a release yet, use the Quick Start steps below.
-
 ## Quick Start
 
+From source:
+
 ```bash
-git clone --recursive https://github.com/r3dbars/recite.git
+git clone https://github.com/r3dbars/recite.git
 cd recite
 brew install espeak-ng
 swift build
 ./scripts/build-and-run.sh
 ```
 
-Source builds use your local Homebrew `espeak-ng` to assemble the app bundle. The downloadable DMG bundles that helper for normal users.
+See [SETUP.md](SETUP.md) for permissions, first launch, DMG builds, and troubleshooting.
 
-On first launch, Recite downloads the selected voice model from Hugging Face. After that, reading text aloud runs locally on your Mac.
+On first launch, Recite downloads the selected voice model from Hugging Face. After that, reading runs locally.
 
 ## Use Recite
 
@@ -97,19 +66,7 @@ On first launch, Recite downloads the selected voice model from Hugging Face. Af
 3. Select text in another app.
 4. Press **Control + Option + R**.
 
-You can also use the menu bar icon to read clipboard text, open the main window, pause playback, or manage the queue.
-
-## Privacy
-
-Recite is local-first by design.
-
-- Selected text is read from Accessibility APIs or a temporary copy fallback.
-- The copy fallback restores your clipboard after it runs.
-- Recite does not send selected text or generated audio to a server.
-- Reading history is stored locally in macOS user defaults and can be cleared in the app.
-- The selected voice model is downloaded once from Hugging Face.
-
-Please do not paste private text into GitHub issues.
+The menu bar icon can also read clipboard text, open the window, pause playback, or manage the queue.
 
 ## Build A Local DMG
 
@@ -117,7 +74,7 @@ Please do not paste private text into GitHub issues.
 ./scripts/build-dmg.sh
 ```
 
-The DMG is written to `.build/dist/Recite-<version>.dmg`. Local builds use ad-hoc signing by default. To use a local signing identity:
+This builds a **release** app and writes `.build/dist/Recite-<version>.dmg`. Local builds use ad-hoc signing by default. To use a local signing identity:
 
 ```bash
 RECITE_CODESIGN_IDENTITY="Apple Development: Your Name (TEAMID)" ./scripts/build-dmg.sh
@@ -128,18 +85,20 @@ RECITE_CODESIGN_IDENTITY="Apple Development: Your Name (TEAMID)" ./scripts/build
 ```text
 Package.swift                         Swift Package entry point
 scripts/build-and-run.sh              Build, sign, and launch Recite.app
-scripts/build-dmg.sh                  Build a local DMG
+scripts/build-dmg.sh                  Build a release DMG
 Recite/Sources/Recite/AppDelegate.swift
                                       Menu bar, hotkey, and app lifecycle
 Recite/Sources/Recite/TextGrabber.swift
                                       Selected text capture
 Recite/Sources/Recite/SpeechEngine.swift
-                                      MLX model loading and audio playback
+                                      MLX engine core, plus ModelLoading/VoicePreview/Generation/Playback
+Recite/Sources/Recite/Speech/         Text preprocessing
+Recite/Sources/Recite/Models/         Voice and model catalogs
 Recite/Sources/Recite/ReadingQueue.swift
                                       Queue and local history
-Recite/Sources/Recite/MenuBarView.swift
-                                      SwiftUI popover, window, and settings
+Recite/Sources/Recite/UI/             SwiftUI popover, window, and settings
 Recite/Resources/                     App metadata, entitlements, and icons
+Tests/ReciteTests/                    Text, voice catalog, and queue tests
 docs/assets/                          README art and generated icon source
 ```
 
@@ -148,6 +107,8 @@ docs/assets/                          README art and generated icon source
 See [SETUP.md](SETUP.md) for setup details.
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
+
+See [SECURITY.md](SECURITY.md) for private vulnerability reporting.
 
 ## License
 

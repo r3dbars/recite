@@ -2,7 +2,8 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-APP_DIR="$PROJECT_DIR/.build/debug/Recite.app"
+export RECITE_BUILD_CONFIG="${RECITE_BUILD_CONFIG:-release}"
+APP_DIR="$PROJECT_DIR/.build/${RECITE_BUILD_CONFIG}/Recite.app"
 DIST_DIR="$PROJECT_DIR/.build/dist"
 STAGING_DIR="$DIST_DIR/Recite-dmg"
 INFO_PLIST="$PROJECT_DIR/Recite/Resources/Info.plist"

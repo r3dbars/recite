@@ -7,17 +7,18 @@ Recite is a small macOS menu bar app that reads selected text aloud with Kokoro 
 - Entry point: `Recite/Sources/Recite/ReciteApp.swift`
 - App lifecycle, menu bar item, popover, hotkey: `AppDelegate.swift`
 - Text capture: `TextGrabber.swift`
-- TTS model loading and playback: `SpeechEngine.swift`
+- TTS model loading and playback: `SpeechEngine.swift` plus `SpeechEngine+*.swift`
+- Text cleanup and sentence chunking: `Speech/TextPreprocessor.swift`
+- Voice and model catalogs: `Models/`
 - Queue and local history: `ReadingQueue.swift`
-- SwiftUI views: `MenuBarView.swift`
+- SwiftUI views: `UI/`
 - App metadata and entitlements: `Recite/Resources/`
 
 ## Local Setup
 
-1. Run `git submodule update --init --recursive`.
-2. Install `espeak-ng` with `brew install espeak-ng`.
-3. Run `swift build`.
-4. Run `./scripts/build-and-run.sh` to assemble and launch a local app bundle.
+1. Install `espeak-ng` with `brew install espeak-ng`.
+2. Run `swift build` (mlx-audio-swift is pinned to Blaizzy via SwiftPM, not a submodule).
+3. Run `./scripts/build-and-run.sh` to assemble and launch a local app bundle.
 
 ## Guardrails
 
@@ -30,5 +31,5 @@ Recite is a small macOS menu bar app that reads selected text aloud with Kokoro 
 ## Verification
 
 - Run `swift build` after code changes.
-- There are no test targets yet, so note that in handoffs.
+- Run `swift test` after text, voice catalog, or queue changes.
 - For contributor display cleanup, verify with `git log --use-mailmap --format='%aN <%aE>' --all | sort | uniq -c | sort -nr`.

@@ -27,8 +27,10 @@ class ReadingQueue: ObservableObject {
     @Published var currentIndex: Int? = nil
     @Published var history: [Item] = []
 
-    private static let historyKey = "readingHistory"
-    private static let maxHistory = 50
+    static let historyKey = "readingHistory"
+    static let maxHistory = 50
+
+    private let defaults: UserDefaults
 
     var currentItem: Item? {
         guard let idx = currentIndex, items.indices.contains(idx) else { return nil }
@@ -37,7 +39,8 @@ class ReadingQueue: ObservableObject {
 
     var isEmpty: Bool { items.isEmpty }
 
-    init() {
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
         loadHistory()
     }
 
@@ -117,12 +120,12 @@ class ReadingQueue: ObservableObject {
 
     func clearHistory() {
         history.removeAll()
-        UserDefaults.standard.removeObject(forKey: Self.historyKey)
+        defaults.removeObject(forKey: Self.historyKey)
     }
 
     // MARK: - History Persistence
 
-    private func addToHistory(_ item: Item) {
+    func addToHistory(_ item: Item) {
         // Deduplicate by text
         history.removeAll { $0.text == item.text }
         history.insert(item, at: 0)
@@ -136,11 +139,11 @@ class ReadingQueue: ObservableObject {
         let data = history.compactMap { item -> [String: String]? in
             ["text": item.text, "source": item.source, "addedAt": ISO8601DateFormatter().string(from: item.addedAt)]
         }
-        UserDefaults.standard.set(data, forKey: Self.historyKey)
+        defaults.set(data, forKey: Self.historyKey)
     }
 
     private func loadHistory() {
-        guard let data = UserDefaults.standard.array(forKey: Self.historyKey) as? [[String: String]] else { return }
+        guard let data = defaults.array(forKey: Self.historyKey) as? [[String: String]] else { return }
         let fmt = ISO8601DateFormatter()
         history = data.compactMap { dict in
             guard let text = dict["text"], let source = dict["source"],

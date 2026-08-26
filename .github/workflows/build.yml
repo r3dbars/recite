@@ -8,17 +8,18 @@ on:
 
 jobs:
   swift-build:
-    name: Swift build
+    name: Swift build and test
     runs-on: macos-26
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
-        with:
-          submodules: recursive
 
       - name: Install espeak-ng
         run: brew install espeak-ng
 
       - name: Build
-        run: swift build
+        run: swift build -c release
+
+      - name: Test
+        run: swift test

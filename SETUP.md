@@ -3,7 +3,7 @@
 Recite is a Swift Package macOS app. The fastest path is:
 
 ```bash
-git clone --recursive https://github.com/r3dbars/recite.git
+git clone https://github.com/r3dbars/recite.git
 cd recite
 brew install espeak-ng
 swift build
@@ -36,11 +36,13 @@ Then select text in another app and press **Control + Option + R**.
 
 The script:
 
-1. Runs `swift build`.
+1. Runs `swift build` (debug by default).
 2. Stops any existing `Recite` process.
 3. Assembles `.build/debug/Recite.app`.
 4. Signs it ad-hoc by default.
 5. Opens the app.
+
+Set `RECITE_BUILD_CONFIG=release` to build and assemble `.build/release/Recite.app`.
 
 To build the app bundle without launching it:
 
@@ -60,17 +62,9 @@ RECITE_CODESIGN_IDENTITY="Apple Development: Your Name (TEAMID)" ./scripts/build
 ./scripts/build-dmg.sh
 ```
 
-The DMG is written to `.build/dist/Recite-<version>.dmg`.
+This defaults to a **release** build and copies `.build/release/Recite.app` into the disk image. The DMG is written to `.build/dist/Recite-<version>.dmg`.
 
 ## Troubleshooting
-
-### `mlx-audio-swift/Package.swift` is missing
-
-Run:
-
-```bash
-git submodule update --init --recursive
-```
 
 ### Model will not load
 
