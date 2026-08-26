@@ -8,7 +8,7 @@ on:
 
 jobs:
   swift-build:
-    name: Swift build and test
+    name: Swift build
     runs-on: macos-26
 
     steps:
