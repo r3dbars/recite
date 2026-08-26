@@ -2,7 +2,15 @@
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-APP_DIR="$PROJECT_DIR/.build/debug/Recite.app"
+CONFIG="${RECITE_BUILD_CONFIG:-debug}"
+case "$CONFIG" in
+  debug|release) ;;
+  *)
+    echo "RECITE_BUILD_CONFIG must be debug or release, got: $CONFIG" >&2
+    exit 1
+    ;;
+esac
+APP_DIR="$PROJECT_DIR/.build/$CONFIG/Recite.app"
 CONTENTS="$APP_DIR/Contents"
 MACOS="$CONTENTS/MacOS"
 FRAMEWORKS="$CONTENTS/Frameworks"
@@ -31,9 +39,9 @@ for arg in "$@"; do
   esac
 done
 
-echo "==> Building..."
+echo "==> Building ($CONFIG)..."
 cd "$PROJECT_DIR"
-swift build
+swift build -c "$CONFIG"
 
 if [ "$LAUNCH_APP" -eq 1 ]; then
   echo "==> Stopping existing Recite process..."
@@ -44,7 +52,7 @@ echo "==> Assembling app bundle..."
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS" "$FRAMEWORKS" "$CONTENTS/Resources"
 
-cp "$PROJECT_DIR/.build/debug/Recite" "$MACOS/Recite"
+cp "$PROJECT_DIR/.build/$CONFIG/Recite" "$MACOS/Recite"
 cp "$RESOURCES/Info.plist" "$CONTENTS/Info.plist"
 cp "$RESOURCES"/AppIcon.icns "$CONTENTS/Resources/" 2>/dev/null || true
 cp "$RESOURCES"/MenuBarIcon*.png "$CONTENTS/Resources/" 2>/dev/null || true

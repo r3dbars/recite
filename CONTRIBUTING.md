@@ -5,7 +5,8 @@ Thanks for taking a look at Recite.
 ## Local Setup
 
 ```bash
-git submodule update --init --recursive
+git clone https://github.com/r3dbars/recite.git
+cd recite
 brew install espeak-ng
 swift build
 ./scripts/build-and-run.sh
@@ -17,9 +18,10 @@ Run:
 
 ```bash
 swift build
+swift test
 ```
 
-There are no automated tests yet. If your change touches text capture, queue behavior, model loading, or playback, include a short manual test note.
+If your change touches text capture, queue behavior, model loading, or playback, include a short manual test note.
 
 ## Privacy Rules
 
@@ -28,6 +30,10 @@ There are no automated tests yet. If your change touches text capture, queue beh
 - Do not log selected text, clipboard text, or text snippets.
 - Counts, states, timings, and error names are fine.
 - Preserve the user's clipboard when using the copy fallback.
+
+## Security
+
+Report vulnerabilities privately. See [SECURITY.md](SECURITY.md). Do not open a public issue for a security report.
 
 ## Code Style
 
