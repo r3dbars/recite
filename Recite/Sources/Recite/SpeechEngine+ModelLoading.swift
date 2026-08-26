@@ -12,10 +12,8 @@ extension SpeechEngine {
     func isModelCached(_ preset: SpeechModelPreset) -> Bool {
         // Mirrors ModelUtils.resolveOrDownloadModel path logic:
         // <HubCache.default.cacheDirectory>/mlx-audio/<repo-with-slashes-replaced>/
-        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first?
-            .deletingLastPathComponent()
+        let cacheDir = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent(".cache/huggingface/hub")
-            ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".cache/huggingface/hub")
         let modelDir = cacheDir
             .appendingPathComponent("mlx-audio")
             .appendingPathComponent(preset.modelID.replacingOccurrences(of: "/", with: "_"))
